@@ -1,0 +1,59 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+dist/
+.pyinstaller/
+*.spec
+*.egg-info/
+env/
+.venv/
+venv/
+ENV/
+
+# Test caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+
+# Editors / OS files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Runtime generated data (do not track)
+output/
+outputs/
+data/
+workbook_build/
+artifacts/
+
+# Validation and smoke outputs
+ccf_a_validation*/
+tests/output/
+tests/live_fallback_output/
+keyword_query_results/
+
+# Scratch and temporary
+*.log
+*.tmp
+*.bak
+
+# Jupyter
+.ipynb_checkpoints/
