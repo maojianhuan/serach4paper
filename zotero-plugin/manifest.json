@@ -1,0 +1,14 @@
+{
+  "manifest_version": 2,
+  "name": "search4paper",
+  "version": "0.1.0",
+  "description": "在 Zotero 中检索 ICML 已录用论文，按研究方向筛选并导入指定集合。",
+  "applications": {
+    "zotero": {
+      "id": "search4paper@local",
+      "update_url": "https://raw.githubusercontent.com/maojianhuan/serach4paper/main/zotero-plugin/updates.json",
+      "strict_min_version": "10.0",
+      "strict_max_version": "10.0.*"
+    }
+  }
+}

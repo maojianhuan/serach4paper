@@ -1,0 +1,45 @@
+:root { color-scheme: light dark; font: 14px system-ui, sans-serif; color: CanvasText; background: Canvas; }
+* { box-sizing: border-box; }
+body { margin: 0; padding: 16px 20px 12px; height: 100vh; display: flex; flex-direction: column; gap: 10px; min-width: 740px; }
+header, .query, .filter, .toolbar, .pagination, .destination, footer { display: flex; align-items: center; gap: 10px; }
+header { justify-content: space-between; }
+h1 { margin: 0; font-size: 22px; }
+header span, .hint { color: GrayText; }
+p { margin: 0; }
+label { display: flex; align-items: center; gap: 5px; }
+.query > label, .destination > label { align-items: stretch; flex-direction: column; gap: 4px; }
+.grow { flex: 1; min-width: 0; }
+input:not([type=checkbox]), select { width: 100%; min-width: 0; border: 1px solid color-mix(in srgb, CanvasText 28%, Canvas); border-radius: 5px; background: Field; color: FieldText; padding: 7px; font: inherit; }
+#year { width: 90px; }
+button { color: ButtonText; background: ButtonFace; border: 1px solid color-mix(in srgb, CanvasText 25%, Canvas); border-radius: 5px; padding: 7px 10px; font: inherit; cursor: pointer; }
+button:hover:not(:disabled) { background: color-mix(in srgb, Highlight 12%, Canvas); }
+button:disabled { opacity: .48; cursor: default; }
+button.primary { background: #245fc0; color: white; border-color: #245fc0; }
+.query > button, .destination > button { align-self: flex-end; }
+.hint { font-size: 12px; line-height: 1.5; }
+.coverage { font-size: 12px; padding: 7px 10px; background: color-mix(in srgb, Highlight 9%, Canvas); border-radius: 4px; }
+.workspace { flex: 1; min-height: 220px; display: grid; grid-template-columns: 1.08fr 1fr; border: 1px solid color-mix(in srgb, CanvasText 20%, Canvas); border-radius: 6px; overflow: hidden; }
+.candidates { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.toolbar { padding: 8px; gap: 7px; flex-wrap: wrap; font-size: 12px; }
+.toolbar button, .pagination button { padding: 4px 7px; font-size: 12px; }
+.table-scroll { flex: 1; min-height: 0; overflow: auto; }
+table { width: 100%; border-collapse: collapse; }
+th { position: sticky; top: 0; z-index: 1; background: Canvas; text-align: left; font-size: 12px; }
+th, td { padding: 8px; border-bottom: 1px solid color-mix(in srgb, CanvasText 12%, Canvas); }
+td:first-child { width: 45px; vertical-align: top; }
+tr.active { background: color-mix(in srgb, Highlight 12%, Canvas); }
+.paper-button { display: block; text-align: left; border: 0; padding: 0; background: transparent; color: CanvasText; line-height: 1.45; }
+.match-fields { display: block; margin-top: 4px; font-size: 11px; color: GrayText; }
+#empty { padding: 20px; color: GrayText; line-height: 1.7; }
+.pagination { justify-content: center; padding: 6px; }
+.preview { min-width: 0; overflow: auto; padding: 14px 18px; border-left: 1px solid color-mix(in srgb, CanvasText 20%, Canvas); }
+h2 { margin: 0 0 8px; font-size: 17px; line-height: 1.45; }
+h3 { font-size: 13px; margin: 16px 0 8px; }
+#abstract, #evidence { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; font-size: 13px; }
+#evidence { padding-left: 18px; }
+#evidence li { margin-bottom: 9px; }
+.preview > p { margin-bottom: 8px; }
+footer { justify-content: space-between; }
+#status { min-height: 20px; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 90px; overflow: auto; }
+#status.error { color: light-dark(#ac2525, #ff9999); }
+@media (max-width: 900px) { body { padding: 10px; gap: 7px; } .query, .destination { gap: 6px; } button { padding: 6px; } }

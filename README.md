@@ -48,6 +48,12 @@ Windows 打包脚本已包含新目录和采集模块。**仓库现有 EXE 尚�
 
 ### 快速开始
 
+#### 在 Zotero 10 内使用独立 XPI
+
+首版 Zotero 插件已加入 `zotero-plugin/`，支持 ICML/OpenReview 公开录用论文检索、研究方向筛选、摘要与命中依据预览，以及导入个人文献库的指定集合或新子集合。PDF 获取使用 Zotero 原生能力。用户只安装 XPI，无需 Python、外部程序或本地通信授权。
+
+运行 `python zotero-plugin/build.py` 生成 `dist/search4paper-0.1.0.xpi`，在 Zotero **工具 → 插件 → 齿轮菜单 → 从文件安装插件** 中安装，再从工具菜单打开 search4paper。[安装、使用及验证说明](zotero-plugin/README.md)。该独立插件首版只支持 ICML；下述 Python/EXE 工具仍支持原有完整来源目录。
+
 #### 直接运行 Windows EXE
 
 双击项目根目录下的：
@@ -346,6 +352,12 @@ Typical workflow:
 5. Download publicly available PDFs.
 
 ### Quick start
+
+#### Standalone Zotero 10 XPI
+
+`zotero-plugin/` provides ICML/OpenReview accepted-paper retrieval, multi-field research-topic filtering, abstract/evidence previews, and import into personal-library collections or new subcollections. PDF retrieval uses Zotero's native attachment APIs. Users only install the XPI; Python, an external service and local API authorization are not required.
+
+Build with `python zotero-plugin/build.py`, install `dist/search4paper-0.1.0.xpi` through **Tools → Plugins → gear menu → Install Plugin From File**, then open search4paper from Tools. [Plugin documentation and validation](zotero-plugin/README.md). The XPI currently supports ICML only; the Python/EXE application below retains its broader source coverage.
 
 #### Run the Windows executable
 
