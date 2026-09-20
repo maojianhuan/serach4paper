@@ -12,6 +12,55 @@ function note(id, changes = {}) {
 }
 const fetchWith = request => core.fetchAccepted(2026, { request });
 
+test('only the three requested conferences map to the selected year', async () => {
+  assert.deepEqual(core.CONFERENCES, ['ICML', 'NeurIPS', 'ICLR']);
+  for (const conference of core.CONFERENCES) {
+    for (const year of [2025, 2026]) assert.equal(core.venueID(conference, year), `${conference}.cc/${year}/Conference`);
+  }
+  let requests = 0;
+  for (const conference of ['ACL', 'NIPS', '', 'constructor', '../ICML']) {
+    await assert.rejects(core.fetchAccepted(2026, { conference, request: async () => { requests++; } }), /请选择/);
+  }
+  assert.equal(requests, 0);
+});
+
+test('every page and normalized paper retain the selected conference and year', async () => {
+  for (const conference of core.CONFERENCES) for (const year of [2025, 2026]) {
+    const venueID = `${conference}.cc/${year}/Conference`, offsets = [];
+    const papers = await core.fetchAccepted(year, { conference, request: async url => {
+      const params = new URL(url).searchParams;
+      assert.equal(params.get('venueid'), venueID);
+      assert.equal(params.get('term'), venueID);
+      assert.equal(params.get('content'), 'venueid');
+      assert.equal(params.get('type'), 'exact');
+      offsets.push(params.get('offset'));
+      return { count: 2, notes: [note(String(offsets.length), { venueid: { value: venueID } })] };
+    } });
+    assert.deepEqual(offsets, ['0', '1']);
+    assert.ok(papers.every(p => p.year === year && p.venueID === venueID));
+    assert.ok(papers.every(p => core.matchPaper(p, query)), 'Matching must remain unchanged across venues');
+  }
+});
+
+test('cross-conference and cross-year API records cannot enter the selected list', async () => {
+  for (const conference of core.CONFERENCES) {
+    const other = conference === 'ICML' ? 'ICLR' : 'ICML';
+    for (const venue of [`${other}.cc/2026/Conference`, `${conference}.cc/2025/Conference`,
+      `${conference}.cc/2026/Conference/Rejected`, `${conference}.cc/2026/Workshop`]) {
+      await assert.rejects(core.fetchAccepted(2026, { conference, request: async () =>
+        ({ count: 1, notes: [note('1', { venueid: { value: venue } })] }) }), /其他会议或未录用/);
+    }
+  }
+});
+
+test('unavailable venue reports the requested conference and year without a fallback', async () => {
+  let requests = 0;
+  await assert.rejects(core.fetchAccepted(2100, { conference: 'NeurIPS', request: async () => {
+    requests++; return { count: 0, notes: [] };
+  } }), /尚未获得 NeurIPS 2100/);
+  assert.equal(requests, 1);
+});
+
 test('research context can occur in another field; unrelated anomaly papers are excluded', () => {
   assert.equal(core.matchPaper({ title: 'Anomaly Detection for Images' }, query), null);
   const result = core.matchPaper({ title: 'Anomaly Detection', abstract: 'We study multivariate time series.' }, query);
@@ -124,6 +173,23 @@ test('saved metadata round-trips without changing paper fields, retrieval time o
   const restored = core.validateMetadata(JSON.parse(JSON.stringify(original)), 2026);
   assert.deepEqual(restored, original);
   assert.deepEqual(core.matchPaper(restored.papers[0], query), core.matchPaper(original.papers[0], query));
+});
+
+test('local metadata is isolated by both conference and year; existing ICML files still load', () => {
+  const oldICML = metadata();
+  assert.equal(core.validateMetadata(oldICML, 2026, 'ICML'), oldICML);
+  for (const conference of core.CONFERENCES) {
+    const saved = metadata();
+    saved.venueID = `${conference}.cc/2026/Conference`;
+    saved.papers[0] = core.normalizeNote(note('1', { venueid: { value: saved.venueID } }), 2026, conference);
+    assert.equal(core.validateMetadata(saved, 2026, conference), saved);
+    assert.throws(() => core.validateMetadata(saved, 2025, conference), /年份不一致/);
+    for (const other of core.CONFERENCES.filter(c => c !== conference)) {
+      assert.throws(() => core.validateMetadata(saved, 2026, other), /会议或年份不一致/);
+      const wrongPaper = { ...saved, papers: [{ ...saved.papers[0], venueID: `${other}.cc/2026/Conference` }] };
+      assert.throws(() => core.validateMetadata(wrongPaper, 2026, conference), /会议、年份不一致/);
+    }
+  }
 });
 
 test('saved lists must have the expected schema, venue, year, timestamp and complete count', () => {

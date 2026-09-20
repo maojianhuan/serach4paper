@@ -2,7 +2,7 @@
 var Search4PaperUI = {
   Zotero: window.arguments[0].Zotero,
   papers: [], candidates: [], selected: new Set(), active: null,
-  page: 0, pageSize: 100, busy: false, controller: null, query: null, loadedYear: null, filtersDirty: true,
+  page: 0, pageSize: 100, busy: false, controller: null, query: null, loadedYear: null, loadedConference: null, filtersDirty: true,
   labels: { title: "标题", abstract: "摘要", keywords: "关键词", tldr: "TLDR" },
   $(id) { return document.getElementById(id); },
   status(text, error = false) {
@@ -14,7 +14,7 @@ var Search4PaperUI = {
     this.$("cancel").disabled = !this.busy;
     if (this.busy) return;
     this.$("filter").disabled = !this.papers.length;
-    this.$("import").disabled = !this.selected.size || this.filtersDirty;
+    this.$("import").disabled = !this.selected.size || this.filtersDirty || this.$("conference").value !== "ICML";
     this.$("select-page").disabled = !this.candidates.length;
     this.$("clear").disabled = !this.selected.size;
     this.$("previous").disabled = this.page === 0;
@@ -68,28 +68,29 @@ var Search4PaperUI = {
   },
   async fetchPapers(signal, refresh = false) {
     const query = this.readQuery();
+    const conference = this.$("conference").value;
     const year = Number(this.$("year").value);
-    Search4PaperCore.validateYear(year);
-    const path = PathUtils.join(this.Zotero.DataDirectory.dir, "search4paper", "ICML", `${year}.json`);
-    this.papers = []; this.loadedYear = null; this.query = null;
+    const venueID = Search4PaperCore.venueID(conference, year);
+    const path = PathUtils.join(this.Zotero.DataDirectory.dir, "search4paper", conference, `${year}.json`);
+    this.papers = []; this.loadedYear = null; this.loadedConference = null; this.query = null;
     this.candidates = []; this.selected.clear(); this.active = null; this.page = 0;
     this.render(); this.preview(null);
-    this.$("coverage").textContent = `正在读取 ICML ${year} 的公开录用名单…`;
+    this.$("coverage").textContent = `正在读取 ${conference} ${year} 的公开录用名单…`;
     this.status("正在读取本地元数据…");
     let metadata, local = false;
     try {
       if (!refresh && await IOUtils.exists(path)) {
         local = true;
-        try { metadata = Search4PaperCore.validateMetadata(await IOUtils.readJSON(path), year); }
+        try { metadata = Search4PaperCore.validateMetadata(await IOUtils.readJSON(path), year, conference); }
         catch (error) { throw new Error(`读取本地元数据失败：${error.message}\n${path}\n请点击“刷新名单”重新获取。`); }
       }
       else {
         this.status("正在连接 OpenReview…");
         const papers = await Search4PaperCore.fetchAccepted(year, {
-          signal, request: (url, requestSignal) => this.request(url, requestSignal),
-          onProgress: (done, total) => this.status(`获取 ICML ${year}：${done} / ${total} 篇`)
+          conference, signal, request: (url, requestSignal) => this.request(url, requestSignal),
+          onProgress: (done, total) => this.status(`获取 ${conference} ${year}：${done} / ${total} 篇`)
         });
-        metadata = { schemaVersion: 1, venueID: `ICML.cc/${year}/Conference`, year,
+        metadata = { schemaVersion: 1, venueID, year,
           fetchedAt: new Date().toISOString(), paperCount: papers.length, papers };
         signal.throwIfAborted();
         this.status(`正在保存 ${papers.length} 篇论文的本地元数据…`);
@@ -107,16 +108,19 @@ var Search4PaperUI = {
       signal.throwIfAborted();
     }
     catch (error) {
-      this.$("coverage").textContent = "本次未加载完整名单；可点击“检索 ICML 论文”读取已有本地数据。";
+      this.$("coverage").textContent = "本次未加载完整名单；可点击“搜索论文”读取已有本地数据。";
       throw error;
     }
     this.papers = metadata.papers;
     this.loadedYear = year;
-    this.$("coverage").textContent = `ICML ${year} · OpenReview 公开录用论文 ${this.papers.length} 篇 · 缺少摘要 ${this.papers.filter(p => !p.abstract.trim()).length} 篇 · ${local ? "本地名单" : "已保存到本地"} · 获取时间 ${new Date(metadata.fetchedAt).toLocaleString()}`;
+    this.loadedConference = conference;
+    this.$("coverage").textContent = `${conference} ${year} · OpenReview 公开录用论文 ${this.papers.length} 篇 · 缺少摘要 ${this.papers.filter(p => !p.abstract.trim()).length} 篇 · ${local ? "本地名单" : "已保存到本地"} · 获取时间 ${new Date(metadata.fetchedAt).toLocaleString()}`;
     await this.filterPapers(signal, query);
   },
   async filterPapers(signal, query = this.readQuery()) {
-    if (Number(this.$("year").value) !== this.loadedYear) throw new Error("年份已更改，请点击“检索 ICML 论文”获取该年的名单。");
+    if (this.$("conference").value !== this.loadedConference || Number(this.$("year").value) !== this.loadedYear) {
+      throw new Error("会议或年份已更改，请点击“搜索论文”获取对应名单。");
+    }
     const candidates = [];
     for (let i = 0; i < this.papers.length; i++) {
       if (i % 100 === 0) {
@@ -129,7 +133,7 @@ var Search4PaperUI = {
     }
     this.query = query; this.candidates = candidates; this.page = 0; this.selected.clear(); this.filtersDirty = false;
     this.render(); this.preview(candidates[0] || null);
-    this.status(`找到 ${candidates.length} 篇候选论文。请查看摘要与命中依据，再勾选导入。`);
+    this.status(`找到 ${candidates.length} 篇候选论文。请查看摘要与命中依据。`);
   },
   render() {
     const tbody = this.$("results"); tbody.replaceChildren();
@@ -186,6 +190,7 @@ var Search4PaperUI = {
     if (select.selectedIndex < 0) select.value = "";
   },
   async importPapers(signal) {
+    if (this.$("conference").value !== "ICML") throw new Error("NeurIPS 和 ICLR 当前仅支持检索与预览。");
     const papers = this.candidates.filter(p => this.selected.has(p.id));
     if (!papers.length) throw new Error("请先选择论文。");
     if (this.filtersDirty) throw new Error("检索条件已修改，请先应用筛选。");
@@ -215,10 +220,11 @@ var Search4PaperUI = {
     this.status(summary, Boolean(failed));
   },
   init() {
-    for (const input of document.querySelectorAll(".query input, .filter input")) {
+    for (const conference of Search4PaperCore.CONFERENCES) this.$("conference").add(new Option(conference, conference));
+    for (const input of document.querySelectorAll(".query input, .query select, .filter input")) {
       input.addEventListener("input", () => {
         this.filtersDirty = true; this.controls();
-        this.status("检索条件已修改，请应用筛选；更换年份后请重新检索。");
+        this.status("检索条件已修改，请应用筛选；更换会议或年份后请重新搜索。");
       });
     }
     this.$("fetch").addEventListener("click", () => this.operation(signal => this.fetchPapers(signal)));

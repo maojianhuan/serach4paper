@@ -17,7 +17,7 @@ async function startup({ rootURI }) {
 function onMainWindowLoad({ window }) {
   const menu = window.document.createXULElement("menuitem");
   menu.id = "search4paper-open";
-  menu.setAttribute("label", "search4paper：检索 ICML 论文…");
+  menu.setAttribute("label", "search4paper：检索 OpenReview 论文…");
   menu.addEventListener("command", () => {
     if (searchWindow && !searchWindow.closed) {
       searchWindow.focus();

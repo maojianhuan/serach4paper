@@ -2,19 +2,20 @@
 <html xmlns="http://www.w3.org/1999/xhtml" lang="zh-CN">
 <head>
   <meta charset="utf-8" />
-  <title>search4paper · ICML 论文检索</title>
+  <title>search4paper · OpenReview 论文检索</title>
   <link rel="stylesheet" href="search.css" />
   <script src="core.js"></script>
   <script src="import.js"></script>
   <script src="search.js" defer="defer"></script>
 </head>
 <body>
-  <header><h1>ICML 论文检索</h1><span>search4paper</span></header>
+  <header><h1>OpenReview 论文检索</h1><span>search4paper</span></header>
   <section class="query" aria-label="论文检索条件">
+    <label>会议 <select id="conference"></select></label>
     <label>会议年份 <input id="year" type="number" min="2000" max="2100" value="2026" /></label>
     <label class="grow">研究方向词组 <input id="terms" value="anomaly detection" placeholder="anomaly detection; outlier detection" /></label>
     <label class="grow">上下文词组 <input id="context" value="time series" placeholder="time series; temporal" /></label>
-    <button id="fetch" class="primary" title="优先读取本地名单；没有本地数据时联网获取并保存">检索 ICML 论文</button>
+    <button id="fetch" class="primary" title="优先读取所选会议、年份的本地名单；没有本地数据时联网获取并保存">搜索论文</button>
   </section>
   <section class="filter" aria-label="研究方向筛选">
     <span>搜索范围</span>
@@ -23,7 +24,7 @@
     <label><input id="field-keywords" type="checkbox" checked="checked" />关键词</label>
     <label><input id="field-tldr" type="checkbox" checked="checked" />TLDR</label>
     <button id="filter" disabled="disabled">应用筛选</button>
-    <button id="refresh-papers" title="重新从 OpenReview 获取所选年份的完整名单，成功后替换本地数据">刷新名单</button>
+    <button id="refresh-papers" title="重新从 OpenReview 获取所选会议、年份的完整名单，成功后替换本地数据">刷新名单</button>
     <button id="cancel" disabled="disabled">取消操作</button>
   </section>
   <p class="hint">分号分隔的词组匹配任意一个；上下文不为空时还须匹配至少一个上下文词组。支持英文词形和连字符变化。</p>

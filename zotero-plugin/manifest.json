@@ -1,8 +1,8 @@
 {
   "manifest_version": 2,
   "name": "search4paper",
-  "version": "0.1.1",
-  "description": "在 Zotero 中检索 ICML 已录用论文，按研究方向筛选并导入指定集合。",
+  "version": "0.1.2",
+  "description": "按会议、年份检索 ICML、NeurIPS、ICLR 的 OpenReview 论文并按研究方向筛选。",
   "applications": {
     "zotero": {
       "id": "search4paper@local",

@@ -11,6 +11,7 @@ label { display: flex; align-items: center; gap: 5px; }
 .grow { flex: 1; min-width: 0; }
 input:not([type=checkbox]), select { width: 100%; min-width: 0; border: 1px solid color-mix(in srgb, CanvasText 28%, Canvas); border-radius: 5px; background: Field; color: FieldText; padding: 7px; font: inherit; }
 #year { width: 90px; }
+#conference { width: 100px; }
 button { color: ButtonText; background: ButtonFace; border: 1px solid color-mix(in srgb, CanvasText 25%, Canvas); border-radius: 5px; padding: 7px 10px; font: inherit; cursor: pointer; }
 button:hover:not(:disabled) { background: color-mix(in srgb, Highlight 12%, Canvas); }
 button:disabled { opacity: .48; cursor: default; }

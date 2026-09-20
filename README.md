@@ -50,9 +50,9 @@ Windows 打包脚本已包含新目录和采集模块。**仓库现有 EXE 尚�
 
 #### 在 Zotero 10 内使用独立 XPI
 
-首版 Zotero 插件已加入 `zotero-plugin/`，支持 ICML/OpenReview 公开录用论文检索、研究方向筛选、摘要与命中依据预览，以及导入个人文献库的指定集合或新子集合。PDF 获取使用 Zotero 原生能力。用户只安装 XPI，无需 Python、外部程序或本地通信授权。
+Zotero 插件位于 `zotero-plugin/`，支持选择 ICML / NeurIPS / ICLR 及年份，检索 OpenReview 公开录用论文、筛选研究方向、预览摘要与命中依据。现有 ICML 导入功能保留；新增会议目前仅支持检索与预览。用户只安装 XPI，无需 Python、外部程序或本地通信授权。
 
-运行 `python zotero-plugin/build.py` 生成 `dist/search4paper-0.1.1.xpi`，在 Zotero **工具 → 插件 → 齿轮菜单 → 从文件安装插件** 中安装，再从工具菜单打开 search4paper。元数据按年份保存到 Zotero 数据目录，支持重启后离线筛选；点击“刷新名单”获取最新数据。[安装、使用及验证说明](zotero-plugin/README.md)。该独立插件首版只支持 ICML；下述 Python/EXE 工具仍支持原有完整来源目录。
+运行 `python zotero-plugin/build.py` 生成 `dist/search4paper-0.1.2.xpi`，在 Zotero **工具 → 插件 → 齿轮菜单 → 从文件安装插件** 中安装，再从工具菜单打开 search4paper。元数据按会议、年份保存到 Zotero 数据目录，支持重启后离线筛选；点击“刷新名单”获取最新数据。[安装、使用及验证说明](zotero-plugin/README.md)。独立插件只检索这三种会议的 OpenReview 数据；下述 Python/EXE 工具仍支持原有完整来源目录。
 
 #### 直接运行 Windows EXE
 
@@ -355,9 +355,9 @@ Typical workflow:
 
 #### Standalone Zotero 10 XPI
 
-`zotero-plugin/` provides ICML/OpenReview accepted-paper retrieval, multi-field research-topic filtering, abstract/evidence previews, and import into personal-library collections or new subcollections. PDF retrieval uses Zotero's native attachment APIs. Users only install the XPI; Python, an external service and local API authorization are not required.
+`zotero-plugin/` provides a conference selector (ICML / NeurIPS / ICLR), year selection, OpenReview accepted-paper retrieval, multi-field research-topic filtering, and abstract/evidence previews. Existing ICML import remains available; the added conferences currently support search and preview only. Users only install the XPI; Python, an external service and local API authorization are not required.
 
-Build with `python zotero-plugin/build.py`, install `dist/search4paper-0.1.1.xpi` through **Tools → Plugins → gear menu → Install Plugin From File**, then open search4paper from Tools. Metadata is saved by year in the Zotero data directory for offline filtering after a restart; use **刷新名单** to fetch an updated list. [Plugin documentation and validation](zotero-plugin/README.md). The XPI currently supports ICML only; the Python/EXE application below retains its broader source coverage.
+Build with `python zotero-plugin/build.py`, install `dist/search4paper-0.1.2.xpi` through **Tools → Plugins → gear menu → Install Plugin From File**, then open search4paper from Tools. Metadata is saved by conference and year in the Zotero data directory for offline filtering after a restart; use **刷新名单** to fetch an updated list. [Plugin documentation and validation](zotero-plugin/README.md). The XPI searches only these three conferences on OpenReview; the Python/EXE application below retains its broader source coverage.
 
 #### Run the Windows executable
 
