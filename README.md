@@ -52,7 +52,11 @@ Windows 打包脚本已包含新目录和采集模块。**仓库现有 EXE 尚�
 
 Zotero 插件位于 `zotero-plugin/`，支持选择 ICML / NeurIPS / ICLR 及年份，检索 OpenReview 公开录用论文、筛选研究方向、预览摘要与命中依据。现有 ICML 导入功能保留；新增会议目前仅支持检索与预览。用户只安装 XPI，无需 Python、外部程序或本地通信授权。
 
-运行 `python zotero-plugin/build.py` 生成 `dist/search4paper-0.1.2.xpi`，在 Zotero **工具 → 插件 → 齿轮菜单 → 从文件安装插件** 中安装，再从工具菜单打开 search4paper。元数据按会议、年份保存到 Zotero 数据目录，支持重启后离线筛选；点击“刷新名单”获取最新数据。[安装、使用及验证说明](zotero-plugin/README.md)。独立插件只检索这三种会议的 OpenReview 数据；下述 Python/EXE 工具仍支持原有完整来源目录。
+下载 [search4paper-0.1.2.xpi](https://github.com/maojianhuan/serach4paper/releases/download/zotero-v0.1.2/search4paper-0.1.2.xpi)（[版本说明与源码标签](https://github.com/maojianhuan/serach4paper/releases/tag/zotero-v0.1.2)），在 Zotero **工具 → 插件 → 齿轮菜单 → 从文件安装插件** 中安装，再从工具菜单打开 search4paper。同一个 XPI 用于 Windows、Linux、macOS，无需按操作系统重新生成；当前适配 Zotero 10.0.x，Linux 已实测，Windows/macOS 尚未验收。
+
+元数据按会议、年份保存到 Zotero 数据目录，支持重启后离线筛选；点击“刷新名单”获取最新数据。[安装、使用、源码构建及发布说明](zotero-plugin/README.md)。源码构建使用 Python 3 标准库运行 `python zotero-plugin/build.py`，产物在 `dist/`；使用插件不需要 Python。Git 跟踪源码、构建脚本和版本号，正式 XPI 由版本标签对应的 GitHub Release 分发，`dist/` 继续忽略。
+
+下述 `search4paper-ui.exe` 是独立 Windows 应用，不是 XPI 生成器；其 Python/PyInstaller 构建步骤不适用于 Zotero 插件。独立 XPI 只检索上述三种会议的 OpenReview 数据，Python/EXE 工具仍支持原有完整来源目录。
 
 #### 直接运行 Windows EXE
 
@@ -357,7 +361,11 @@ Typical workflow:
 
 `zotero-plugin/` provides a conference selector (ICML / NeurIPS / ICLR), year selection, OpenReview accepted-paper retrieval, multi-field research-topic filtering, and abstract/evidence previews. Existing ICML import remains available; the added conferences currently support search and preview only. Users only install the XPI; Python, an external service and local API authorization are not required.
 
-Build with `python zotero-plugin/build.py`, install `dist/search4paper-0.1.2.xpi` through **Tools → Plugins → gear menu → Install Plugin From File**, then open search4paper from Tools. Metadata is saved by conference and year in the Zotero data directory for offline filtering after a restart; use **刷新名单** to fetch an updated list. [Plugin documentation and validation](zotero-plugin/README.md). The XPI searches only these three conferences on OpenReview; the Python/EXE application below retains its broader source coverage.
+Download [search4paper-0.1.2.xpi](https://github.com/maojianhuan/serach4paper/releases/download/zotero-v0.1.2/search4paper-0.1.2.xpi) ([release notes and source tag](https://github.com/maojianhuan/serach4paper/releases/tag/zotero-v0.1.2)), install it through **Tools → Plugins → gear menu → Install Plugin From File**, then open search4paper from Tools. The same XPI is used on Windows, Linux and macOS without rebuilding for each OS. It currently targets Zotero 10.0.x; Linux has been tested, while Windows/macOS validation is pending.
+
+Metadata is saved by conference and year for offline filtering; use **刷新名单** to fetch an updated list. [Installation, source builds, releases and validation](zotero-plugin/README.md). Developers can build with Python 3's standard library using `python zotero-plugin/build.py`; plugin users do not need Python. Git tracks source, the build script and the version; tagged GitHub Releases distribute the XPI, and `dist/` stays ignored.
+
+The `search4paper-ui.exe` below is a separate Windows application, not an XPI builder. Its Python/PyInstaller build instructions do not apply to the Zotero plugin. The XPI searches only the three conferences above on OpenReview; the Python/EXE application retains its broader source coverage.
 
 #### Run the Windows executable
 

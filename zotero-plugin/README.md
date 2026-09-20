@@ -6,7 +6,11 @@
 
 ## 安装与使用
 
-1. 在 Zotero 10 中打开 **工具 → 插件（Tools → Plugins）**，点击齿轮菜单的 **从文件安装插件（Install Plugin From File）**，选择 `search4paper-0.1.2.xpi`。
+下载：[search4paper-0.1.2.xpi](https://github.com/maojianhuan/serach4paper/releases/download/zotero-v0.1.2/search4paper-0.1.2.xpi) · [版本说明与源码标签](https://github.com/maojianhuan/serach4paper/releases/tag/zotero-v0.1.2) · [全部版本](https://github.com/maojianhuan/serach4paper/releases)。选择 Release 中的 `.xpi` 附件；GitHub 自动提供的 Source code 压缩包是源码，不能直接作为插件安装。
+
+同一个 XPI 用于 Windows、Linux、macOS，无需为不同系统重新生成。目前 manifest 适配 Zotero 10.0.x；Linux + Zotero 10.0.3 已实测，Windows/macOS 尚未验收。安装者只需要 Zotero 和 XPI，不需要 Python、Node 或任何 EXE。
+
+1. 在 Zotero 10 中打开 **工具 → 插件（Tools → Plugins）**，点击齿轮菜单的 **从文件安装插件（Install Plugin From File）**，选择下载的 `search4paper-0.1.2.xpi`。
 2. 打开 **工具 → search4paper：检索 OpenReview 论文…**。
 3. 从下拉框选择 **ICML / NeurIPS / ICLR**，用现有年份控件输入或调节年份，再输入研究方向词组和可选上下文词组，点击 **搜索论文**。例如会议 `ICLR`、年份 `2026`、主题 `anomaly detection`、上下文 `time series`。
 4. 点击候选标题查看作者、摘要和逐字段命中依据；勾选需要导入的论文。结果每页 100 篇，跨页选择保留，“选中本页”只选当前页。
@@ -59,15 +63,42 @@ NeurIPS 和 ICLR 当前仅支持搜索、筛选和预览；上面的导入操作
 
 ## 从源码构建
 
-构建工具需要 Python 3，使用插件不需要 Python：
+打包入口是本目录的 `build.py`，只使用 Python 3 标准库，不需要安装 pip/npm 依赖。在仓库根目录运行：
 
-```bash
+```text
 python zotero-plugin/build.py
 ```
 
-产物为 `dist/search4paper-0.1.2.xpi`。XPI 只包含 manifest、bootstrap 和 HTML/CSS/JavaScript，不包含论文快照、Python 或测试代码。
+若 Python 3 的命令名不同，Linux/macOS 可用 `python3 zotero-plugin/build.py`，Windows 可用 `py -3 zotero-plugin/build.py`。这是开发者打包步骤，插件运行时不会执行这些命令。
 
-Zotero 要求 manifest 提供更新清单地址；`updates.json` 当前为空，首版使用手动安装更新。只有将清单发布到仓库地址后，Zotero 才能读取它；本地构建不会发布任何文件。
+版本号从 `manifest.json` 读取；当前产物为 `dist/search4paper-0.1.2.xpi`。构建脚本将 manifest、bootstrap 和 HTML/CSS/JavaScript 打包为 ZIP 格式的 XPI，不包含论文快照、Python、测试代码或平台二进制。源码或版本变化后重新打包一次即可，跨操作系统使用无需重新构建。
+
+| 文件 | 用途 |
+| --- | --- |
+| `zotero-plugin/build.py` | 生成 Zotero 插件 XPI；仅打包时需要 Python 3 |
+| `dist/search4paper-0.1.2.xpi` | 用户安装到 Zotero 的插件 |
+| `search4paper-ui.exe` | 另一个独立 Windows 应用，不生成 XPI |
+| `code/build_ui_exe.py` | 使用 PyInstaller 构建上述 EXE，与 XPI 无关 |
+
+## 版本与发布
+
+Git 跟踪插件源码、`build.py`、`manifest.json` 中的版本号和发布工作流。`dist/` 保持在 `.gitignore` 中；正式 XPI 作为对应 GitHub Release 的附件保存，不提交到 Git。
+
+发布工作流为 [release-zotero.yml](../.github/workflows/release-zotero.yml)，只在推送 `zotero-v*` 标签时运行。它校验标签与 manifest 版本一致，运行 JavaScript 测试，从标签指向的源码打包，然后创建 Release 并上传 XPI。Release 说明取自带注释标签的消息。Python、Node 和 GitHub CLI 只在 GitHub 的构建环境中使用，不进入 XPI。
+
+发布新版本时：
+
+1. 更新 `manifest.json` 版本、README 中的版本下载链接和验证记录，提交并推送源码。
+2. 对该提交创建带注释标签，并在标签消息中说明变更和实际验证范围。下面以 `0.1.2` 为示例；后续发布需替换成新版本号，不覆盖已发布标签或安装包。
+
+   ```bash
+   git tag -a zotero-v0.1.2 -m "search4paper for Zotero 0.1.2"
+   git push origin zotero-v0.1.2
+   ```
+
+3. 在仓库 Actions 页面确认发布工作流成功，并从 Release 下载 XPI 核对。普通源码推送、本地打包不会创建 Release。
+
+Zotero 要求 manifest 提供更新清单地址；`updates.json` 当前为空，用户从 Release 下载后手动安装更新。发布 Release 本身不会启用插件自动更新。
 
 ## 验证
 

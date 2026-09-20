@@ -1,0 +1,48 @@
+name: Release Zotero plugin
+
+on:
+  push:
+    tags:
+      - 'zotero-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Check tag matches plugin version
+        id: version
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          version = json.loads(Path("zotero-plugin/manifest.json").read_text(encoding="utf-8"))["version"]
+          expected = f"zotero-v{version}"
+          if os.environ["GITHUB_REF_NAME"] != expected:
+              raise SystemExit(f"Release tag must be {expected}")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"version={version}\n")
+          PY
+
+      - name: Test plugin logic
+        run: node --test tests/test_zotero_plugin.cjs
+
+      - name: Build XPI from the tagged source
+        run: python3 zotero-plugin/build.py
+
+      - name: Publish release and XPI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLUGIN_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "dist/search4paper-${PLUGIN_VERSION}.xpi" \
+            --verify-tag \
+            --title "search4paper for Zotero ${PLUGIN_VERSION}" \
+            --notes-from-tag
