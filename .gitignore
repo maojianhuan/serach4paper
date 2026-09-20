@@ -49,6 +49,7 @@ ccf_a_validation*/
 tests/output/
 tests/live_fallback_output/
 keyword_query_results/
+research_results/
 
 # Scratch and temporary
 *.log

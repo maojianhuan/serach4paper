@@ -1,0 +1,47 @@
+{
+  "targets": [
+    {"conference": "ICLR", "year": 2026},
+    {"conference": "ICML", "year": 2026}
+  ],
+  "search_fields": ["title", "abstract", "keywords", "tldr"],
+  "context_anchors": [
+    "agent", "agents", "agentic", "llm", "large language model",
+    "language model", "foundation model", "tool-using agent", "autonomous agent"
+  ],
+  "query_groups": {
+    "direct_agent_memory": {
+      "direct": true,
+      "terms": ["agent memory", "memory agent", "memory-augmented agent", "long-term memory", "lifelong memory", "persistent memory"]
+    },
+    "memory_types": {
+      "terms": ["episodic memory", "semantic memory", "procedural memory", "reasoning memory", "trajectory memory", "experience memory", "skill memory", "working memory", "latent memory", "graph memory", "hierarchical memory", "structured memory"]
+    },
+    "memory_operations": {
+      "terms": ["memory formation", "memory writing", "memory retrieval", "memory consolidation", "memory update", "memory editing", "memory management", "memory reconstruction", "memory compression", "memory organization", "memory pruning", "memory forgetting", "memory reflection", "memory distillation"]
+    },
+    "experience_memory": {
+      "standalone_terms": ["reasoning bank", "experience bank", "evolving playbook"],
+      "terms": ["reasoning bank", "experience bank", "experience repository", "experience library", "skill library", "playbook", "structured experience", "successful trajectory", "failed trajectory", "cross-task memory", "cross-session memory", "multi-session memory"]
+    },
+    "direct_self_evolving": {
+      "direct": true,
+      "terms": ["self-evolving agent", "self evolving agent", "self-improving agent", "self improving agent", "self-learning agent", "self-refining agent", "self-adaptive agent", "recursive self-improvement"]
+    },
+    "continual_test_time_learning": {
+      "terms": ["continual learning agent", "lifelong learning agent", "online learning agent", "test-time learning", "test time learning", "test-time adaptation", "test-time training", "test-time optimization", "learning without gradient updates", "gradient-free learning", "training-free adaptation"]
+    },
+    "experience_driven_learning": {
+      "terms": ["learning from experience", "experience-driven agent", "autonomous experience learning", "trajectory learning", "trajectory reflection", "trajectory refinement", "trajectory distillation", "experience replay", "experience accumulation", "experience reuse", "successful and failed experiences"]
+    },
+    "reflection_feedback": {
+      "terms": ["self-reflection", "reflective learning", "execution feedback", "environment feedback", "failure feedback", "self-critique", "self-correction", "error-driven learning"]
+    },
+    "context_evolution": {
+      "standalone_terms": ["agentic context engineering", "evolving context", "evolving playbook"],
+      "terms": ["context engineering", "agentic context engineering", "evolving context", "adaptive context", "context optimization", "context consolidation", "evolving playbook", "prompt evolution", "instruction optimization", "strategy refinement", "textual gradient", "textual optimization"]
+    },
+    "skill_tool_workflow": {
+      "terms": ["skill acquisition", "skill discovery", "skill learning", "skill refinement", "reusable skills", "tool learning", "tool creation", "tool synthesis", "dynamic tool creation", "tool discovery", "tool reuse", "workflow learning", "workflow optimization", "plan optimization", "policy refinement"]
+    }
+  }
+}
