@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
-from tkinter import Tk
+from tkinter import Tk, Toplevel, ttk
 from unittest.mock import patch
 from urllib.error import URLError
 
@@ -394,6 +394,73 @@ class DesktopSearchTests(unittest.TestCase):
             self.ui.bibtex_enrich_button.invoke()
             warning.assert_called_once()
             enrich.assert_not_called()
+
+    def test_zotero_dialog_passes_destination_tags_and_pdf_option_for_selected_papers(self):
+        make_snapshot(self.directory)
+        self.ui.search_text.set("assistant")
+        self.run_search()
+        self.ui.results.selection_set(self.ui.results.get_children())
+        collections = [dict(key="COLL1234", name="Research", parentCollection=False)]
+        result = [dict(title="Paper", status="created", key="PAPER123", error="", pdf_error="", pdf_status="已导入 PDF")]
+        with patch.object(self.ui.zotero_client, "collections", return_value=collections), \
+             patch.object(paper_ui.zotero, "import_papers", return_value=result) as importer, \
+             patch.object(paper_ui.messagebox, "showinfo") as info:
+            self.ui.zotero_button.invoke()
+            self.assertTrue(self.ui.search_button.instate(["disabled"]))
+            self.wait_for(lambda: any(isinstance(child, Toplevel) for child in self.root.winfo_children()))
+            dialog = next(child for child in self.root.winfo_children() if isinstance(child, Toplevel))
+            controls = dialog.winfo_children()[0].winfo_children()
+            next(child for child in controls if isinstance(child, ttk.Combobox)).current(1)
+            for child in controls:
+                if isinstance(child, ttk.Entry) and not isinstance(child, ttk.Combobox):
+                    child.delete(0, "end")
+                    child.insert(0, "TSAD" if int(child.grid_info()["row"]) == 2 else "time series; anomaly detection")
+                elif isinstance(child, ttk.Checkbutton):
+                    child.invoke()
+            next(child for child in controls if isinstance(child, ttk.Button) and child.cget("text") == "导入").invoke()
+            self.wait_for(lambda: self.ui.status.get().startswith("Zotero 导入完成"))
+        self.assertFalse(self.errors)
+        self.assertTrue(self.ui.search_button.instate(["!disabled"]))
+        self.assertFalse(self.ui.search_stale)
+        self.assertEqual(len(importer.call_args.args[1]), 1)
+        self.assertEqual(importer.call_args.kwargs["collection"], "COLL1234")
+        self.assertEqual(importer.call_args.kwargs["new_collection"], "TSAD")
+        self.assertEqual(importer.call_args.kwargs["tags"], ["time series", "anomaly detection"])
+        self.assertTrue(importer.call_args.kwargs["include_pdfs"])
+        info.assert_called_once()
+
+    def test_zotero_cancel_and_connection_failure_restore_buttons_without_writes(self):
+        make_snapshot(self.directory)
+        self.ui.search_text.set("assistant")
+        self.run_search()
+        self.ui.results.selection_set(self.ui.results.get_children())
+        with patch.object(self.ui.zotero_client, "collections", return_value=[]), \
+             patch.object(paper_ui.zotero, "import_papers") as importer:
+            self.ui.zotero_button.invoke()
+            self.wait_for(lambda: any(isinstance(child, Toplevel) for child in self.root.winfo_children()))
+            dialog = next(child for child in self.root.winfo_children() if isinstance(child, Toplevel))
+            controls = dialog.winfo_children()[0].winfo_children()
+            next(child for child in controls if isinstance(child, ttk.Button) and child.cget("text") == "取消").invoke()
+            importer.assert_not_called()
+        self.assertTrue(self.ui.zotero_button.instate(["!disabled"]))
+        with patch.object(self.ui.zotero_client, "collections", side_effect=RuntimeError("offline")):
+            self.ui.zotero_button.invoke()
+            self.wait_for(lambda: bool(self.errors))
+        self.assertIn("offline", self.errors[0][1])
+        self.assertTrue(self.ui.zotero_button.instate(["!disabled"]))
+
+    def test_zotero_requires_selection_and_reports_partial_pdf_failure(self):
+        with patch.object(self.ui.zotero_client, "collections") as connect, \
+             patch.object(paper_ui.messagebox, "showwarning") as warning:
+            self.ui.zotero_button.invoke()
+            warning.assert_called_once()
+            connect.assert_not_called()
+        result = [dict(title="Imported paper", status="created", key="PAPER123", error="", pdf_status="", pdf_error="PDF unavailable")]
+        with patch.object(paper_ui.messagebox, "showwarning") as warning:
+            self.ui._zotero_done(result)
+        self.assertIn("新增 1", self.ui.status.get())
+        self.assertIn("Imported paper", warning.call_args.args[1])
+        self.assertIn("PDF unavailable", warning.call_args.args[1])
 
     def test_topic_highlights_real_phrase_variants_and_clears_on_deselection(self):
         rows = make_snapshot(self.directory)

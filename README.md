@@ -105,6 +105,7 @@ UI 主要包含抓取和搜索两部分：
 - 导出适合 AI 阅读的 JSONL；
 - 将当前可见且选中的论文导出为 BibTeX；
 - 按 DOI 补全选中论文缺失的 BibTeX，并记录来源、获取时间和逐篇失败原因；
+- 将选中论文直接导入本机 Zotero 10，支持文献夹、标签、来源笔记和可选 PDF；
 - 批量下载公开 PDF；
 - 查看抓取来源、警告和失败信息。
 
@@ -267,6 +268,23 @@ PDF 筛选要求文件实际存在；搜索会读取已有下载记录。筛选�
 补全成功后可立即导出；重新搜索会读取已有补全结果，搜索本身不联网。详情页展示引用状态、来源、获取时间和失败原因。
 每篇每次只查询一次，失败后可手动再次点击补全；已成功的条目直接复用。损坏记录或补全记录与当前 DOI 不一致时明确报错。
 
+### 一键导入 Zotero 10
+
+1. 在运行本工具的同一台电脑上启动 Zotero 10，在“设置 → 高级”中启用“允许此计算机上的其他应用程序与 Zotero 通信”。使用默认端口 23119。
+2. 搜索并选中论文，点击结果列表上方的“导入选中到 Zotero”。
+3. 选择个人文献库中的目标文献夹；可填写新建子文献夹名称和分号分隔的标签。同一父文献夹下的唯一同名文献夹会直接复用。
+4. 按需勾选 PDF，点击“导入”，切换到 Zotero 完成原生授权。批量导入和附件上传涉及多次写入，建议选择“始终允许”。本工具仅在当前进程内保留授权密钥，重启工具后需要再次授权。
+
+导入标题、作者、年份、会议/期刊、摘要和来源链接，并附加包含检索依据及已有 BibTeX 的来源笔记。原始作者姓名保留为 Zotero 单字段姓名，未推断姓/名；用于正式引用前可在 Zotero 中调整。无需 DOI 或 BibTeX 即可导入。
+
+按规范化 DOI、OpenReview ID（包括 Zotero 已有条目的 OpenReview URL）或会议/年份限定的来源记录 ID 检查重复；不按相似标题自动合并。已有条目只追加目标文献夹、标签和缺失的来源笔记，保留已有书目字段。若标识匹配多个条目，该篇明确报错。
+
+PDF 优先使用已关联的本地文件，否则使用现有公开 PDF 下载逻辑，复制到 Zotero 的附件存储中。已保存 PDF 的条目会复用附件。下载、上传或笔记失败会单独列出，成功导入的论文条目仍保留；连接或授权错误会停止本批次的后续处理。再次点击导入可处理尚未完成的内容。
+
+此功能使用 [Zotero 10 本地 API](https://www.zotero.org/support/dev/web_api/v3/local_api)，首版支持个人文献库，暂不提供群组库选择。Linux 和 Windows 使用同一接口；仓库现有 Windows EXE 需要重新构建。
+
+验证记录（2026-09-20）：131 项自动化测试通过；在 Linux + Xvfb 的独立 Zotero 10.0.3 资料库中，从界面导入 11 篇 ICML 2026 候选，核对元数据、去重、用户修改保留及原生授权允许/拒绝。有效 PDF 测试文件通过本地路径和 HTTP 下载两种方式上传，并核对存储内容和中文带空格文件名。OpenReview 当前对这台机器的 PDF 请求返回浏览器验证/HTTP 403，已验证其逐篇失败提示；遇到此情况可在浏览器下载后关联本地 PDF。Windows EXE 尚未实测。
+
 ### 项目结构
 
 ```text
@@ -278,6 +296,7 @@ search4paper/
 │  ├─ paper_enrichment.py
 │  ├─ paper_ui.py
 │  ├─ paper_search.py
+│  ├─ zotero_import.py
 │  ├─ query_target_papers.py
 │  ├─ query_research_topic.py
 │  ├─ validate_ccf_a_2025.py
@@ -387,6 +406,7 @@ The UI provides:
 - AI-friendly JSONL export;
 - BibTeX export of visible selected papers;
 - DOI-based completion of missing BibTeX with provenance and per-paper failures;
+- Direct import into local Zotero 10 with collections, tags, provenance notes and optional PDFs;
 - Public PDF downloads;
 - Source, warning, and failure reporting.
 
@@ -558,6 +578,18 @@ later searches restore saved results without network requests. The detail pane s
 Each paper gets one lookup per attempt; failed items can be retried explicitly, while successful results are reused.
 Corrupt records or saved results associated with a different DOI fail explicitly.
 
+### Import into Zotero 10
+
+Run Zotero 10 on the same computer and enable Settings → Advanced → “Allow other applications on this computer to communicate with Zotero”, using the default port 23119. Select papers and click “导入选中到 Zotero” above the results. Choose a personal-library collection, optionally name a new subcollection, enter semicolon-separated tags, and choose whether to include PDFs. An unambiguous collection with the same parent and name is reused.
+
+Click Import and authorize the application in Zotero's native dialog. “Always Allow” is recommended for batches and attachments, which need multiple write requests. The tool keeps the key only in process memory; restarting it requires another authorization.
+
+Import includes bibliographic metadata, abstracts, source links and a child note with match evidence and available BibTeX. Author names are preserved as single-field creators, without guessing family/given names; review these before formal citation. Neither DOI nor BibTeX is required. Exact normalized DOI, OpenReview ID/URL, or venue/year-scoped source record IDs identify existing papers. Existing bibliographic fields are preserved while collections, tags and missing provenance notes are added. Ambiguous identities fail explicitly instead of merging by title similarity.
+
+Optional PDFs are copied into Zotero storage from existing local files or downloaded through the existing public-PDF workflow. Stored PDFs are reused. Note/PDF errors are reported separately from successful parent items; connection or authorization errors stop the remaining batch. An explicit reimport can complete unfinished work. This uses the [Zotero 10 Local API](https://www.zotero.org/support/dev/web_api/v3/local_api) and currently supports personal libraries. Windows requires rebuilding the existing EXE.
+
+Verified on 2026-09-20: 131 automated tests passed. An isolated Linux/Xvfb Zotero 10.0.3 library received 11 ICML 2026 candidates through the UI; metadata, deduplication, preservation of user edits and native authorization allow/deny were checked. Valid PDF fixtures were imported from local paths and HTTP downloads, with stored bytes and Unicode/space filenames verified. OpenReview currently returns a browser challenge/HTTP 403 for PDF requests from this machine; per-paper failure reporting was verified. Such PDFs can be downloaded in a browser and linked locally before importing. The Windows EXE has not been tested.
+
 ### Repository layout
 
 ```text
@@ -569,6 +601,7 @@ search4paper/
 │  ├─ paper_enrichment.py
 │  ├─ paper_ui.py
 │  ├─ paper_search.py
+│  ├─ zotero_import.py
 │  ├─ query_target_papers.py
 │  ├─ query_research_topic.py
 │  ├─ validate_ccf_a_2025.py

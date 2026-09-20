@@ -25,6 +25,7 @@ from . import fetch_openreview_accepted as collector
 from . import paper_enrichment as enrichment
 from . import paper_search as search
 from . import query_research_topic as topic
+from . import zotero_import as zotero
 
 
 def filter_catalog(rank="全部", venue_type="全部", field="全部", query="") -> list[dict]:
@@ -96,6 +97,7 @@ class PaperUI:
         self.status = StringVar(value="Ready")
         self.result_rows: dict[str, dict[str, object]] = {}
         self.search_query = ""
+        self.zotero_client = zotero.ZoteroClient()
 
         self._active_page = StringVar(value="fetch")
 
@@ -401,6 +403,8 @@ class PaperUI:
         for button in (self.open_web_button, self.open_pdf_button, self.markdown_button, self.bibtex_button,
                        self.oa_button, self.link_pdf_button):
             button.pack(side=LEFT, padx=(0, 8))
+        self.zotero_button = ttk.Button(view_bar, text="导入选中到 Zotero", command=self._start_zotero_import)
+        self.zotero_button.pack(side="right", padx=8)
         columns = ("conference", "year", "title", "authors", "abstract_status", "pdf_status", "source_url")
         self.results = ttk.Treeview(self.result_panel, columns=columns, show="headings", selectmode="extended")
         for col, title, width in (("conference", "会议/期刊", 110), ("year", "年份", 70), ("title", "标题", 410),
@@ -811,10 +815,90 @@ class PaperUI:
     def _set_action_buttons(self, state: str) -> None:
         for button in (self.abstract_button, self.export_button, self.pdf_button, self.search_button, self.report_button,
                        self.open_web_button, self.open_pdf_button, self.markdown_button, self.bibtex_button, self.bibtex_enrich_button,
-                       self.oa_button, self.link_pdf_button):
+                       self.oa_button, self.link_pdf_button, self.zotero_button):
             button.config(state=state)
         if self.search_stale or self.last_search_result is None:
             self.report_button.config(state="disabled")
+
+    def _start_zotero_import(self) -> None:
+        selected = self._selected_result_rows()
+        if not selected:
+            messagebox.showwarning("Zotero", "请先在搜索结果中选择论文")
+            return
+        self._set_action_buttons("disabled")
+        self.status.set("正在连接本机 Zotero 10…")
+        def worker():
+            try:
+                collections = self.zotero_client.collections()
+                self.root.after(0, self._choose_zotero_collection, [dict(row) for _, row in selected], collections)
+            except Exception as exc:
+                self.root.after(0, self._action_error, "Zotero 连接失败", str(exc))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _choose_zotero_collection(self, rows, collections) -> None:
+        dialog = Toplevel(self.root)
+        dialog.title("导入到 Zotero 个人文献库")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        panel = ttk.Frame(dialog, padding=14)
+        panel.pack(fill=BOTH, expand=True)
+        panel.columnconfigure(1, weight=1)
+        labels = ["我的文献库"] + [f"{item['name']} [{item['key']}]" for item in collections]
+        choice = StringVar(dialog, value=labels[0])
+        name = StringVar(dialog)
+        tags = StringVar(dialog, value="; ".join(dict.fromkeys(
+            [f"{row.get('conference', '')} {row.get('year', '')}".strip() for row in rows]
+            + [term for row in rows for term in row.get("matched_terms", [])])))
+        pdfs = BooleanVar(dialog, value=False)
+        ttk.Label(panel, text=f"导入当前选中的 {len(rows)} 篇论文；已有条目加入文献夹并追加标签。").grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(panel, text="目标文献夹").grid(row=1, column=0, sticky="w", pady=8)
+        box = ttk.Combobox(panel, textvariable=choice, values=labels, state="readonly", width=50)
+        box.grid(row=1, column=1, sticky="ew", padx=8)
+        ttk.Label(panel, text="新建子文献夹（可选）").grid(row=2, column=0, sticky="w")
+        ttk.Entry(panel, textvariable=name).grid(row=2, column=1, sticky="ew", padx=8)
+        ttk.Label(panel, text="标签（分号分隔）").grid(row=3, column=0, sticky="w", pady=8)
+        ttk.Entry(panel, textvariable=tags).grid(row=3, column=1, sticky="ew", padx=8)
+        ttk.Checkbutton(panel, text="同时导入 PDF：优先本地文件，否则下载公开 PDF", variable=pdfs).grid(row=4, column=0, columnspan=2, sticky="w")
+        ttk.Label(panel, text="导入时请切换到 Zotero 完成授权。批量导入及附件上传建议选择“始终允许”。\n已有条目的标题、作者和摘要保持原样；原始作者姓名以单字段保留。",
+                  wraplength=620).grid(row=5, column=0, columnspan=2, sticky="w", pady=10)
+        def cancel():
+            dialog.destroy()
+            self._set_action_buttons("normal")
+            self.status.set("已取消 Zotero 导入")
+        def start():
+            index = box.current()
+            options = dict(collection=collections[index - 1]["key"] if index > 0 else "",
+                           new_collection=name.get().strip(), include_pdfs=pdfs.get(),
+                           tags=[tag.strip() for tag in tags.get().replace("；", ";").split(";") if tag.strip()])
+            dialog.destroy()
+            def worker():
+                try:
+                    results = zotero.import_papers(self.zotero_client, rows, **options,
+                        progress=lambda text: self.root.after(0, self.status.set, text))
+                    self.root.after(0, self._zotero_done, results)
+                except Exception as exc:
+                    self.root.after(0, self._action_error, "Zotero 导入失败", str(exc))
+            threading.Thread(target=worker, daemon=True).start()
+        ttk.Button(panel, text="取消", command=cancel).grid(row=6, column=0, sticky="w")
+        ttk.Button(panel, text="导入", command=start).grid(row=6, column=1, sticky="e")
+        dialog.protocol("WM_DELETE_WINDOW", cancel)
+
+    def _zotero_done(self, results) -> None:
+        self._set_action_buttons("normal")
+        created = sum(item["status"] == "created" for item in results)
+        existing = sum(item["status"] == "existing" for item in results)
+        failed = sum(item["status"] == "failed" for item in results)
+        summary = f"Zotero 导入完成：新增 {created}，已有 {existing}，失败 {failed}"
+        self.status.set(summary)
+        details = []
+        for item in results:
+            if item["error"] or item["pdf_error"]:
+                details.append(f"{item['title']}：{item['error']} {item['pdf_error']}".strip())
+        if details:
+            messagebox.showwarning("Zotero 导入结果", summary + "\n\n" + "\n".join(details))
+        else:
+            pdf_count = sum(item["pdf_status"] == "已导入 PDF" for item in results)
+            messagebox.showinfo("Zotero", summary + f"；本次导入 PDF {pdf_count}。")
 
     def _start_bibtex_enrichment(self) -> None:
         selected = self._selected_result_rows()

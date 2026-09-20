@@ -56,6 +56,8 @@ def _run_pyinstaller(name: str, dist_dir: Path, build_temp: Path) -> None:
         "--hidden-import",
         "code.paper_enrichment",
         "--hidden-import",
+        "code.zotero_import",
+        "--hidden-import",
         "code.paper_search",
         "--hidden-import",
         "code.query_target_papers",
