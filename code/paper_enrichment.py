@@ -157,6 +157,36 @@ def export_reading_list(rows: Iterable[dict[str, Any]], output_path: Path) -> Pa
     return output_path
 
 
+def export_bibtex(rows: Iterable[dict[str, Any]], output_path: Path) -> Path:
+    """Export source BibTeX in selection order, checking all rows before writing."""
+    records = []
+    citation_keys = {}
+    missing = []
+    for row in rows:
+        title = _as_text(row.get("title")) or paper_key(row)
+        bibtex = _as_text(row.get("bibtex"))
+        if not bibtex:
+            missing.append(title)
+            continue
+        entries = collector.parse_bibtex_entries(bibtex.encode("utf-8"))
+        if (len(entries) != 1 or entries[0]["_raw_bibtex"] != bibtex
+                or not entries[0]["_citation_key"]):
+            raise ValueError(f"无法识别论文「{title}」的单条来源 BibTeX；未写入文件。")
+        key = entries[0]["_citation_key"]
+        if key in citation_keys:
+            raise ValueError(f"BibTeX 引用键重复：{key}\n{citation_keys[key]}\n{title}\n"
+                             "请分别导出这些论文；未写入文件。")
+        citation_keys[key] = title
+        records.append(bibtex)
+    if missing:
+        raise ValueError(f"以下 {len(missing)} 篇论文缺少来源 BibTeX，请取消选中后重试；未写入文件。\n"
+                         + "\n".join(missing))
+    if not records:
+        raise ValueError("请先选择论文；未写入文件。")
+    output_path.write_text("\n\n".join(records) + "\n", encoding="utf-8")
+    return output_path
+
+
 def _abstract_from_openreview(payload: Any) -> str:
     notes = payload.get("notes", []) if isinstance(payload, dict) else []
     if not isinstance(notes, list) or not notes:

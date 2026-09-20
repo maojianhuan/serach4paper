@@ -8,6 +8,58 @@ from code import paper_enrichment as enrichment
 
 
 class PaperEnrichmentTests(unittest.TestCase):
+    def test_bibtex_preserves_source_text_and_selection_order(self):
+        first = '@inproceedings{z2025,\n  title = {{LLM} 与记忆},\n  author = {M{\\\"u}ller and 王明},\n  year = {2025}\n}'
+        second = '@article{a2024, title={Second paper}, journal={Research \\& Science}, year={2024}}'
+        rows = [{"title": "LLM 与记忆", "bibtex": first}, {"title": "Second paper", "bibtex": second}]
+        with tempfile.TemporaryDirectory() as directory:
+            output = enrichment.export_bibtex(iter(rows), Path(directory) / "papers.bib")
+            self.assertEqual(output.read_text(encoding="utf-8"), first + "\n\n" + second + "\n")
+
+    def test_bibtex_missing_records_are_listed_without_creating_or_overwriting_file(self):
+        rows = [{"title": "Available", "bibtex": "@article{one, title={Available}}"},
+                {"title": "Missing one"}, {"title": "Missing two", "bibtex": "  \n"}]
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "papers.bib"
+            for existing in (False, True):
+                with self.subTest(existing=existing):
+                    if existing:
+                        output.write_text("Keep existing bibliography", encoding="utf-8")
+                    with self.assertRaises(ValueError) as error:
+                        enrichment.export_bibtex(iter(rows), output)
+                    self.assertIn("2 篇论文缺少来源 BibTeX", str(error.exception))
+                    self.assertIn("Missing one", str(error.exception))
+                    self.assertIn("Missing two", str(error.exception))
+                    if existing:
+                        self.assertEqual(output.read_text(), "Keep existing bibliography")
+                    else:
+                        self.assertFalse(output.exists())
+
+    def test_bibtex_duplicate_citation_keys_report_both_papers_before_writing(self):
+        rows = [{"title": title, "bibtex": f"@inproceedings{{Wang_2026_CVPR, title={{{title}}}}}"}
+                for title in ("First paper", "Second paper")]
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "papers.bib"
+            output.write_text("Keep existing bibliography", encoding="utf-8")
+            with self.assertRaises(ValueError) as error:
+                enrichment.export_bibtex(rows, output)
+            for text in ("引用键重复", "Wang_2026_CVPR", "First paper", "Second paper"):
+                self.assertIn(text, str(error.exception))
+            self.assertEqual(output.read_text(), "Keep existing bibliography")
+
+    def test_bibtex_empty_selection_or_unrecognized_record_leaves_file_unchanged(self):
+        selections = [[], [{"title": "Broken", "bibtex": "not BibTeX"}],
+                      [{"title": "Truncated", "bibtex": "@article{key, title={Paper}"}],
+                      [{"title": "No key", "bibtex": "@article{, title={Paper}}"}],
+                      [{"title": "Two entries", "bibtex": "@article{a, title={A}}\n@article{b, title={B}}"}]]
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "papers.bib"
+            output.write_text("Keep existing bibliography", encoding="utf-8")
+            for rows in selections:
+                with self.subTest(rows=rows), self.assertRaises(ValueError):
+                    enrichment.export_bibtex(rows, output)
+                self.assertEqual(output.read_text(), "Keep existing bibliography")
+
     def test_reading_list_preserves_selection_order_and_escapes_markdown(self):
         rows = [{"title": "A [test] *paper*", "abstract": "Use <memory> and [tools].",
                  "source_url": "https://example.test/a paper(x)", "conference": "ICLR", "year": 2025},

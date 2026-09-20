@@ -248,6 +248,69 @@ class DesktopSearchTests(unittest.TestCase):
         self.ui._apply_result_view()
         self.assertEqual(len(self.ui.results.get_children()), 2)
 
+    def test_bibtex_export_uses_visible_selection_and_sort_order_in_both_search_modes(self):
+        base = make_snapshot(self.directory)[0]
+        rows = [{**base, "openreview_id": name, "source_record_id": name,
+                 "title": f"{name} Assistant", "abstract": "Available" if name == "Gamma" else "",
+                 "bibtex": f"@inproceedings{{{name}, title={{{name} Assistant}}, year={{2025}}}}"}
+                for name in ("Alpha", "Beta", "Gamma", "Delta")]
+        make_snapshot(self.directory, rows=rows)
+        for mode in ("标题布尔查询", "主题多字段"):
+            with self.subTest(mode=mode):
+                self.ui.search_mode.set(mode)
+                self.ui._search_mode_changed()
+                self.ui.search_text.set("assistant")
+                self.ui.topic_terms.set("assistant")
+                self.ui.only_missing_abstract.set(False)
+                self.run_search()
+                self.ui.result_sort.set("标题 Z–A")
+                self.ui._apply_result_view()
+                self.ui.results.selection_set([item for item, row in self.ui.result_rows.items()
+                                               if row["openreview_id"] != "Delta"])
+                self.ui.only_missing_abstract.set(True)
+                self.ui._apply_result_view()
+                output = self.directory / "selected.bib"
+                with patch.object(paper_ui.filedialog, "asksaveasfilename", return_value=str(output)):
+                    self.ui.bibtex_button.invoke()
+                self.assertFalse(self.errors)
+                self.assertEqual(output.read_text(encoding="utf-8"), rows[1]["bibtex"] + "\n\n" + rows[0]["bibtex"] + "\n")
+                self.assertIn("已导出 2 篇论文 BibTeX", self.ui.status.get())
+
+    def test_bibtex_export_empty_selection_cancel_and_busy_button_do_not_write(self):
+        with patch.object(paper_ui.filedialog, "asksaveasfilename", return_value="") as choose, \
+             patch.object(paper_ui.messagebox, "showwarning") as warning, \
+             patch.object(enrichment, "export_bibtex") as export:
+            self.ui.bibtex_button.invoke()
+            warning.assert_called_once()
+            choose.assert_not_called()
+            make_snapshot(self.directory)
+            self.ui.search_text.set("assistant")
+            self.run_search()
+            self.ui.results.selection_set(self.ui.results.get_children())
+            self.ui._set_action_buttons("disabled")
+            self.ui.bibtex_button.invoke()
+            choose.assert_not_called()
+            self.ui._set_action_buttons("normal")
+            self.ui.bibtex_button.invoke()
+            choose.assert_called_once()
+            self.assertEqual(choose.call_args.kwargs["defaultextension"], ".bib")
+            export.assert_not_called()
+
+    def test_bibtex_export_missing_source_is_reported_without_overwriting_file(self):
+        make_snapshot(self.directory)
+        self.ui.search_text.set("assistant")
+        self.run_search()
+        self.ui.results.selection_set(self.ui.results.get_children())
+        output = self.directory / "selected.bib"
+        output.write_text("Keep existing bibliography", encoding="utf-8")
+        with patch.object(paper_ui.filedialog, "asksaveasfilename", return_value=str(output)):
+            self.ui.bibtex_button.invoke()
+        self.assertEqual(len(self.errors), 1)
+        self.assertEqual(self.errors[0][0], "导出失败")
+        self.assertIn("缺少来源 BibTeX", self.errors[0][1])
+        self.assertIn("An Autonomous Assistant", self.errors[0][1])
+        self.assertEqual(output.read_text(), "Keep existing bibliography")
+
     def test_topic_highlights_real_phrase_variants_and_clears_on_deselection(self):
         rows = make_snapshot(self.directory)
         rows[0]["abstract"] = "An agent uses EPISODIC-MEMORIES and episodic memory."

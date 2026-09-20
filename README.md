@@ -103,6 +103,7 @@ UI 主要包含抓取和搜索两部分：
 - 查看摘要与命中依据，导出候选论文及覆盖报告；
 - 批量获取选中论文摘要；
 - 导出适合 AI 阅读的 JSONL；
+- 将当前可见且选中的论文导出为 BibTeX；
 - 批量下载公开 PDF；
 - 查看抓取来源、警告和失败信息。
 
@@ -254,6 +255,10 @@ PDF 筛选要求文件实际存在；搜索会读取已有下载记录。筛选�
 “导出选中阅读清单”将当前可见且选中的论文导出为 Markdown，包含标题、会议、年份、作者、摘要及已有网页/PDF链接。
 缺失摘要会标明“未提供摘要”；本地 PDF 链接只在相应文件可访问的机器上有效。
 
+“导出选中 BibTeX”按当前列表顺序将可见且选中的论文保存为 UTF-8 `.bib` 文件，保留来源提供的 BibTeX 条目。
+若有论文缺少来源 BibTeX，会列出缺失论文并停止导出；条目无法识别或引用键重复时也会报错，已有目标文件不会因此被覆盖。
+可取消选中缺失条目的论文后重试，引用键重复的论文可分别导出。此操作只使用本地已有数据，不联网补全或自动生成引用。
+
 ### 项目结构
 
 ```text
@@ -372,6 +377,7 @@ The UI provides:
 - Export of candidates, coverage and statistics;
 - Batch abstract enrichment;
 - AI-friendly JSONL export;
+- BibTeX export of visible selected papers;
 - Public PDF downloads;
 - Source, warning, and failure reporting.
 
@@ -528,6 +534,11 @@ these actions require exactly one selected paper and report missing links/files.
 Export selected reading list writes Markdown containing visible selected papers' titles, venues, years,
 authors, abstracts and available webpage/PDF links. Missing abstracts are explicitly marked.
 Local PDF links only work on machines where those files are accessible.
+
+Export selected BibTeX writes a UTF-8 `.bib` file in visible selection order, preserving the source-provided entries.
+Missing BibTeX records are listed and stop the export. Unrecognized entries or duplicate citation keys also stop it,
+without overwriting an existing destination. Deselect papers with missing entries to retry, or export papers with
+conflicting keys separately. This uses local data only; it does not fetch or generate citations.
 
 ### Repository layout
 

@@ -393,9 +393,11 @@ class PaperUI:
         self.open_web_button = ttk.Button(reading_bar, text="打开论文网页", command=lambda: self._open_selected_paper("web"))
         self.open_pdf_button = ttk.Button(reading_bar, text="打开本地 PDF", command=lambda: self._open_selected_paper("pdf"))
         self.markdown_button = ttk.Button(reading_bar, text="导出选中阅读清单", command=self._export_reading_list)
+        self.bibtex_button = ttk.Button(reading_bar, text="导出选中 BibTeX", command=self._export_bibtex)
         self.oa_button = ttk.Button(reading_bar, text="查找开放全文", command=self._start_oa_lookup)
         self.link_pdf_button = ttk.Button(reading_bar, text="关联本地 PDF", command=self._link_local_pdf)
-        for button in (self.open_web_button, self.open_pdf_button, self.markdown_button, self.oa_button, self.link_pdf_button):
+        for button in (self.open_web_button, self.open_pdf_button, self.markdown_button, self.bibtex_button,
+                       self.oa_button, self.link_pdf_button):
             button.pack(side=LEFT, padx=(0, 8))
         columns = ("conference", "year", "title", "authors", "abstract_status", "pdf_status", "source_url")
         self.results = ttk.Treeview(self.result_panel, columns=columns, show="headings", selectmode="extended")
@@ -566,6 +568,20 @@ class PaperUI:
             try:
                 enrichment.export_reading_list((row for _, row in selected), Path(path))
                 self.status.set(f"已导出 {len(selected)} 篇论文阅读清单：{path}")
+            except (OSError, ValueError) as exc:
+                messagebox.showerror("导出失败", str(exc))
+
+    def _export_bibtex(self) -> None:
+        selected = self._selected_result_rows()
+        if not selected:
+            messagebox.showwarning("导出", "请先选择论文；只导出当前可见且选中的论文。")
+            return
+        path = filedialog.asksaveasfilename(title="导出选中 BibTeX", initialfile="selected_papers.bib",
+                                          defaultextension=".bib", filetypes=[("BibTeX", "*.bib")])
+        if path:
+            try:
+                enrichment.export_bibtex((row for _, row in selected), Path(path))
+                self.status.set(f"已导出 {len(selected)} 篇论文 BibTeX：{path}")
             except (OSError, ValueError) as exc:
                 messagebox.showerror("导出失败", str(exc))
 
@@ -783,7 +799,8 @@ class PaperUI:
 
     def _set_action_buttons(self, state: str) -> None:
         for button in (self.abstract_button, self.export_button, self.pdf_button, self.search_button, self.report_button,
-                       self.open_web_button, self.open_pdf_button, self.markdown_button, self.oa_button, self.link_pdf_button):
+                       self.open_web_button, self.open_pdf_button, self.markdown_button, self.bibtex_button,
+                       self.oa_button, self.link_pdf_button):
             button.config(state=state)
         if self.search_stale or self.last_search_result is None:
             self.report_button.config(state="disabled")
