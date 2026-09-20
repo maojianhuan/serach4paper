@@ -14,7 +14,7 @@
     <label>会议年份 <input id="year" type="number" min="2000" max="2100" value="2026" /></label>
     <label class="grow">研究方向词组 <input id="terms" value="anomaly detection" placeholder="anomaly detection; outlier detection" /></label>
     <label class="grow">上下文词组 <input id="context" value="time series" placeholder="time series; temporal" /></label>
-    <button id="fetch" class="primary">检索 ICML 论文</button>
+    <button id="fetch" class="primary" title="优先读取本地名单；没有本地数据时联网获取并保存">检索 ICML 论文</button>
   </section>
   <section class="filter" aria-label="研究方向筛选">
     <span>搜索范围</span>
@@ -23,10 +23,11 @@
     <label><input id="field-keywords" type="checkbox" checked="checked" />关键词</label>
     <label><input id="field-tldr" type="checkbox" checked="checked" />TLDR</label>
     <button id="filter" disabled="disabled">应用筛选</button>
+    <button id="refresh-papers" title="重新从 OpenReview 获取所选年份的完整名单，成功后替换本地数据">刷新名单</button>
     <button id="cancel" disabled="disabled">取消操作</button>
   </section>
   <p class="hint">分号分隔的词组匹配任意一个；上下文不为空时还须匹配至少一个上下文词组。支持英文词形和连字符变化。</p>
-  <p id="coverage" class="coverage">从 OpenReview 获取所选年份的公开录用名单，再在完整列表中筛选。</p>
+  <p id="coverage" class="coverage">优先读取本地录用名单；首次检索联网获取并保存。需要更新时点击“刷新名单”。</p>
   <div class="workspace">
     <section class="candidates" aria-label="候选论文">
       <div class="toolbar"><strong id="count">候选论文 0 篇</strong><span id="selection">已选 0 篇</span>

@@ -114,6 +114,47 @@ test('HTTP failure is not retried or converted into an empty success', async () 
   assert.equal(calls, 1);
 });
 
+function metadata() {
+  return { schemaVersion: 1, year: 2026, venueID: 'ICML.cc/2026/Conference',
+    fetchedAt: '2026-09-20T12:34:56.000Z', paperCount: 1, papers: [core.normalizeNote(note('1'), 2026)] };
+}
+
+test('saved metadata round-trips without changing paper fields, retrieval time or matches', () => {
+  const original = metadata();
+  const restored = core.validateMetadata(JSON.parse(JSON.stringify(original)), 2026);
+  assert.deepEqual(restored, original);
+  assert.deepEqual(core.matchPaper(restored.papers[0], query), core.matchPaper(original.papers[0], query));
+});
+
+test('saved lists must have the expected schema, venue, year, timestamp and complete count', () => {
+  for (const change of [{ schemaVersion: 2 }, { venueID: 'ICML.cc/2026/Workshop' }, { year: 2025 },
+    { fetchedAt: '' }, { fetchedAt: null }, { papers: null }, { paperCount: 0, papers: [] },
+    { paperCount: 2 }, { paperCount: '1' }]) {
+    assert.throws(() => core.validateMetadata({ ...metadata(), ...change }, 2026));
+  }
+  assert.throws(() => core.validateMetadata(null, 2026));
+  for (const year of ['2026', 2026.5, 0, 2101, NaN, Infinity]) assert.throws(() => core.validateYear(year));
+});
+
+test('local metadata rejects duplicates, wrong-venue papers and unusable fields', () => {
+  const duplicate = metadata();
+  duplicate.papers.push({ ...duplicate.papers[0] }); duplicate.paperCount = 2;
+  assert.throws(() => core.validateMetadata(duplicate, 2026), /重复/);
+  for (const change of [{ id: '' }, { title: ' ' }, { abstract: null }, { authors: 'Author' },
+    { authors: [null] }, { year: 2025 }, { venueID: 'ICML.cc/2026/Conference/Rejected' }]) {
+    const saved = metadata(); Object.assign(saved.papers[0], change);
+    assert.throws(() => core.validateMetadata(saved, 2026));
+  }
+});
+
+test('saved metadata cannot replace source links with executable or local URLs', () => {
+  for (const change of [{ url: 'javascript:alert(1)' }, { url: 'https://openreview.net/forum?id=another' },
+    { pdfURL: 'file:///etc/passwd' }, { pdfURL: 'javascript:alert(1)' }, { pdfURL: 'not a URL' }]) {
+    const saved = metadata(); Object.assign(saved.papers[0], change);
+    assert.throws(() => core.validateMetadata(saved, 2026), /链接/);
+  }
+});
+
 test('identities match existing Python imports and preserve case-sensitive OpenReview IDs', () => {
   const a = core.identities({ id: 'PaperA', doi: 'https://doi.org/10.1234/ABC' });
   const b = core.identities({ extra: 'OpenReview ID: PaperA\nDOI: 10.1234/abc', url: 'https://openreview.net/forum?id=PaperA' });

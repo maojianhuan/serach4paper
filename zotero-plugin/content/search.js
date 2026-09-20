@@ -66,26 +66,53 @@ var Search4PaperUI = {
     }
     finally { signal.removeEventListener("abort", abort); }
   },
-  async fetchPapers(signal) {
+  async fetchPapers(signal, refresh = false) {
     const query = this.readQuery();
     const year = Number(this.$("year").value);
+    Search4PaperCore.validateYear(year);
+    const path = PathUtils.join(this.Zotero.DataDirectory.dir, "search4paper", "ICML", `${year}.json`);
     this.papers = []; this.loadedYear = null; this.query = null;
     this.candidates = []; this.selected.clear(); this.active = null; this.page = 0;
     this.render(); this.preview(null);
     this.$("coverage").textContent = `正在读取 ICML ${year} 的公开录用名单…`;
-    this.status("正在连接 OpenReview…");
+    this.status("正在读取本地元数据…");
+    let metadata, local = false;
     try {
-      this.papers = await Search4PaperCore.fetchAccepted(year, {
-        signal, request: (url, requestSignal) => this.request(url, requestSignal),
-        onProgress: (done, total) => this.status(`获取 ICML ${year}：${done} / ${total} 篇`)
-      });
+      if (!refresh && await IOUtils.exists(path)) {
+        local = true;
+        try { metadata = Search4PaperCore.validateMetadata(await IOUtils.readJSON(path), year); }
+        catch (error) { throw new Error(`读取本地元数据失败：${error.message}\n${path}\n请点击“刷新名单”重新获取。`); }
+      }
+      else {
+        this.status("正在连接 OpenReview…");
+        const papers = await Search4PaperCore.fetchAccepted(year, {
+          signal, request: (url, requestSignal) => this.request(url, requestSignal),
+          onProgress: (done, total) => this.status(`获取 ICML ${year}：${done} / ${total} 篇`)
+        });
+        metadata = { schemaVersion: 1, venueID: `ICML.cc/${year}/Conference`, year,
+          fetchedAt: new Date().toISOString(), paperCount: papers.length, papers };
+        signal.throwIfAborted();
+        this.status(`正在保存 ${papers.length} 篇论文的本地元数据…`);
+        try {
+          await IOUtils.makeDirectory(PathUtils.parent(path), { createAncestors: true });
+          signal.throwIfAborted();
+          // Replace the previous complete list only after the new JSON is written.
+          await IOUtils.writeJSON(path, metadata, { tmpPath: `${path}.tmp` });
+        }
+        catch (error) {
+          signal.throwIfAborted();
+          throw new Error(`保存本地元数据失败：${error.message}\n${path}`);
+        }
+      }
+      signal.throwIfAborted();
     }
     catch (error) {
-      this.$("coverage").textContent = "未取得完整录用名单，当前没有可筛选的数据。";
+      this.$("coverage").textContent = "本次未加载完整名单；可点击“检索 ICML 论文”读取已有本地数据。";
       throw error;
     }
+    this.papers = metadata.papers;
     this.loadedYear = year;
-    this.$("coverage").textContent = `ICML ${year} · OpenReview 公开录用论文 ${this.papers.length} 篇 · 缺少摘要 ${this.papers.filter(p => !p.abstract.trim()).length} 篇 · 获取时间 ${new Date().toLocaleString()}`;
+    this.$("coverage").textContent = `ICML ${year} · OpenReview 公开录用论文 ${this.papers.length} 篇 · 缺少摘要 ${this.papers.filter(p => !p.abstract.trim()).length} 篇 · ${local ? "本地名单" : "已保存到本地"} · 获取时间 ${new Date(metadata.fetchedAt).toLocaleString()}`;
     await this.filterPapers(signal, query);
   },
   async filterPapers(signal, query = this.readQuery()) {
@@ -195,6 +222,7 @@ var Search4PaperUI = {
       });
     }
     this.$("fetch").addEventListener("click", () => this.operation(signal => this.fetchPapers(signal)));
+    this.$("refresh-papers").addEventListener("click", () => this.operation(signal => this.fetchPapers(signal, true)));
     this.$("filter").addEventListener("click", () => this.operation(signal => this.filterPapers(signal)));
     this.$("import").addEventListener("click", () => this.operation(signal => this.importPapers(signal)));
     this.$("cancel").addEventListener("click", () => this.controller?.abort());

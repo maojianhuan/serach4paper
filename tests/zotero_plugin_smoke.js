@@ -29,7 +29,7 @@ async function runSearch4PaperSmoke({ expectedDataDir, expectedIDs, reportPath }
     });
     const ui = win.Search4PaperUI;
     await record('installed-menu-and-window', { version: addon.version });
-    ui.$('fetch').click();
+    ui.$('refresh-papers').click();
     await waitFor(() => !ui.busy);
     assert(ui.papers.length > 0 && ui.query, ui.$('status').textContent);
     const ids = ui.candidates.map(paper => paper.id).sort();
@@ -85,14 +85,14 @@ async function runSearch4PaperSmoke({ expectedDataDir, expectedIDs, reportPath }
 
     const request = ui.request;
     ui.request = async () => { throw new Error('Injected HTTP 403'); };
-    ui.$('fetch').click(); await waitFor(() => !ui.busy);
+    ui.$('refresh-papers').click(); await waitFor(() => !ui.busy);
     assert(!ui.papers.length && !ui.candidates.length && ui.$('import').disabled, 'Failed refresh cannot expose stale results');
     assert(ui.$('status').textContent.includes('403'), 'Network failure must be visible');
     ui.request = request;
     await record('failed-fetch-clears-stale-results');
     ui.request = async (_url, signal) => new Promise((_resolve, reject) =>
       signal.addEventListener('abort', () => reject(new Error('cancelled')), { once: true }));
-    ui.$('fetch').click(); ui.$('cancel').click(); await waitFor(() => !ui.busy);
+    ui.$('refresh-papers').click(); ui.$('cancel').click(); await waitFor(() => !ui.busy);
     assert(ui.$('status').textContent.includes('取消'), 'Cancellation must complete');
     ui.request = request;
     await record('cancel-in-flight-fetch');
@@ -106,6 +106,148 @@ async function runSearch4PaperSmoke({ expectedDataDir, expectedIDs, reportPath }
     report.ok = true;
   }
   catch (error) { report.ok = false; report.error = String(error); report.stack = error.stack; }
+  await IOUtils.writeJSON(reportPath, report);
+  return report;
+}
+
+// Run after the live smoke test, and again after restarting Zotero. All network
+// requests here are blocked or replaced with fixtures in the plugin window.
+// Temporarily corrupts the isolated profile's saved list, then restores it.
+async function runSearch4PaperMetadataSmoke({ expectedDataDir, expectedIDs, reportPath }) {
+  const assert = (condition, message) => { if (!condition) throw new Error(message); };
+  const report = { checks: [], zotero: Zotero.version };
+  const record = name => report.checks.push(name);
+  const waitFor = async (predicate, description) => {
+    const start = Date.now();
+    while (!predicate()) {
+      if (Date.now() - start > 30000) throw new Error('Timed out waiting for ' + description);
+      await Zotero.Promise.delay(50);
+    }
+  };
+  const open = async () => {
+    document.getElementById('search4paper-open').doCommand();
+    let win;
+    await waitFor(() => {
+      win = [...Services.wm.getEnumerator(null)].find(w => w.location.href === 'chrome://search4paper/content/search.xhtml');
+      return win?.Search4PaperUI && win.document.readyState === 'complete';
+    }, 'plugin window to open');
+    return win;
+  };
+  let win, ui, originalRequest, path, savedText;
+  const createdPaths = [];
+  try {
+    assert(expectedDataDir && Zotero.DataDirectory.dir === expectedDataDir, 'Use an explicitly selected isolated test data directory');
+    path = PathUtils.join(expectedDataDir, 'search4paper', 'ICML', '2026.json');
+    savedText = await IOUtils.readUTF8(path);
+    const saved = JSON.parse(savedText);
+    win = await open(); ui = win.Search4PaperUI; originalRequest = ui.request;
+    win.Search4PaperCore.validateMetadata(saved, 2026);
+    report.paperCount = saved.paperCount; report.fetchedAt = saved.fetchedAt;
+    let requests = 0;
+    const offline = async () => { requests++; throw new Error('Injected offline HTTP 403'); };
+    const click = async id => { ui.$(id).click(); await waitFor(() => !ui.busy, id + ': ' + ui.$('status').textContent); };
+    const assertLoaded = () => {
+      assert(ui.papers.length === saved.paperCount && ui.loadedYear === 2026, ui.$('status').textContent);
+      assert(ui.$('coverage').textContent.includes('本地名单'), 'Local source must be visible');
+      assert(ui.$('coverage').textContent.includes(new Date(saved.fetchedAt).toLocaleString()), 'Original retrieval time must remain visible');
+      if (expectedIDs) assert(JSON.stringify(ui.candidates.map(p => p.id).sort()) === JSON.stringify([...expectedIDs].sort()), 'Local search must retain reference matches');
+    };
+    ui.request = offline;
+    await click('fetch'); assertLoaded();
+    assert(requests === 0, 'A saved list must not require a network request');
+    const ids = ui.candidates.map(p => p.id);
+    await click('filter');
+    assert(JSON.stringify(ui.candidates.map(p => p.id)) === JSON.stringify(ids) && !requests, 'Offline filtering must preserve matches');
+    record('offline-read-and-filter');
+
+    win.close(); await waitFor(() => win.closed, 'plugin window to close');
+    // Wait for the native window-close event before opening the same named dialog.
+    await Zotero.Promise.delay(200);
+    win = await open(); ui = win.Search4PaperUI; originalRequest = ui.request;
+    ui.request = offline;
+    await click('fetch'); assertLoaded();
+    assert(requests === 0, 'Reopening the dialog must load from disk');
+    record('reopen-window-keeps-metadata-and-timestamp');
+
+    await click('refresh-papers');
+    assert(requests === 1 && ui.$('status').textContent.includes('403'), 'Manual refresh must request the network and expose failure');
+    assert(!ui.papers.length && ui.$('import').disabled, 'Failed refresh must not display stale results');
+    assert(await IOUtils.readUTF8(path) === savedText, 'Failed refresh must preserve the previous file byte for byte');
+    await click('fetch'); assertLoaded();
+    assert(requests === 1, 'The old file must remain explicitly reloadable offline');
+    record('failed-refresh-preserves-saved-list');
+
+    ui.request = async (_url, signal) => new Promise((_resolve, reject) =>
+      signal.addEventListener('abort', () => reject(new Error('cancelled')), { once: true }));
+    ui.$('refresh-papers').click(); ui.$('cancel').click(); await waitFor(() => !ui.busy);
+    assert(ui.$('status').textContent.includes('取消') && await IOUtils.readUTF8(path) === savedText, 'Cancelled refresh must preserve saved metadata');
+    record('cancel-preserves-saved-list');
+
+    ui.request = offline;
+    for (const broken of ['{incomplete', JSON.stringify({ ...saved, year: 2025 })]) {
+      await IOUtils.writeUTF8(path, broken);
+      await click('fetch');
+      assert(!ui.papers.length && ui.$('status').textContent.includes('读取本地元数据失败'), 'Invalid local data must fail explicitly');
+      assert(requests === 1 && await IOUtils.readUTF8(path) === broken, 'Invalid files must not trigger silent downloads or replacement');
+    }
+    await IOUtils.writeUTF8(path, savedText, { tmpPath: path + '.tmp' });
+    record('invalid-local-data-fails-without-network');
+
+    const fixture = (year, title = 'Anomaly Detection for Time Series') => ({
+      id: 'metadata-fixture-' + year, number: 1, content: {
+        venueid: { value: `ICML.cc/${year}/Conference` }, title: { value: title },
+        authors: { value: ['Test Author'] }, abstract: { value: 'Synthetic test record, not a real paper.' }
+      }
+    });
+    for (const year of [2099, 2100]) {
+      const target = PathUtils.join(expectedDataDir, 'search4paper', 'ICML', `${year}.json`);
+      assert(!await IOUtils.exists(target), 'Test year must not already contain saved data');
+      createdPaths.push(target);
+      ui.$('year').value = String(year);
+      let calls = 0;
+      ui.request = async url => {
+        calls++;
+        assert(new URL(url).searchParams.get('venueid') === `ICML.cc/${year}/Conference`, 'Selected year must be requested');
+        return { count: 1, notes: [fixture(year)] };
+      };
+      await click('fetch');
+      assert(calls === 1 && ui.papers.length === 1 && ui.loadedYear === year, 'Missing year must be fetched and saved');
+      win.Search4PaperCore.validateMetadata(await IOUtils.readJSON(target), year);
+      const before = await IOUtils.readUTF8(target);
+      calls = 0;
+      ui.request = async () => {
+        if (++calls === 1) return { count: 2, notes: [fixture(year)] };
+        throw new Error('Injected second-page failure');
+      };
+      await click('refresh-papers');
+      assert(calls === 2 && !ui.papers.length && await IOUtils.readUTF8(target) === before, 'A partial refresh must never replace the saved list');
+      ui.request = async () => ({ count: 1, notes: [fixture(year, 'Updated Anomaly Detection for Time Series')] });
+      await click('refresh-papers');
+      const updated = await IOUtils.readJSON(target);
+      assert(updated.papers[0].title.startsWith('Updated ') && updated.fetchedAt !== JSON.parse(before).fetchedAt, 'Successful refresh replaces content and retrieval time');
+      assert(!await IOUtils.exists(target + '.tmp'), 'Completed write must not leave its temporary file');
+      const updatedText = await IOUtils.readUTF8(target);
+      await IOUtils.makeDirectory(target + '.tmp');
+      try {
+        await click('refresh-papers');
+        assert(!ui.papers.length && ui.$('status').textContent.includes('保存本地元数据失败'), 'Disk write failure must be visible');
+        assert(await IOUtils.readUTF8(target) === updatedText, 'Failed disk write must preserve the complete previous file');
+      }
+      finally { await IOUtils.remove(target + '.tmp'); }
+    }
+    assert(await IOUtils.readUTF8(path) === savedText, 'Fetching other years must not change the 2026 list');
+    record('first-fetch-year-isolation-and-complete-refresh');
+    record('disk-write-failure-preserves-previous-file');
+    ui.$('year').value = '2026'; ui.request = offline;
+    await click('fetch'); assertLoaded();
+    report.ok = true;
+  }
+  catch (error) { report.ok = false; report.error = String(error); report.stack = error.stack; }
+  finally {
+    if (ui) ui.request = originalRequest;
+    if (savedText !== undefined) await IOUtils.writeUTF8(path, savedText, { tmpPath: path + '.tmp' });
+    for (const target of createdPaths) await IOUtils.remove(target, { ignoreAbsent: true });
+  }
   await IOUtils.writeJSON(reportPath, report);
   return report;
 }

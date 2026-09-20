@@ -89,8 +89,43 @@ var Search4PaperCore = (() => {
     };
   }
 
-  async function fetchAccepted(year, { request, signal, onProgress = () => {} }) {
+  function validateYear(year) {
     if (!Number.isInteger(year) || year < 2000 || year > 2100) throw new Error("请输入有效年份（2000–2100）。");
+  }
+
+  // Local files are an input boundary: reject incomplete or mismatched lists.
+  function validateMetadata(metadata, year) {
+    validateYear(year);
+    const venueID = `ICML.cc/${year}/Conference`;
+    if (metadata?.schemaVersion !== 1) throw new Error("不支持的本地元数据格式版本。");
+    if (metadata.year !== year || metadata.venueID !== venueID) throw new Error("本地元数据的会议或年份不一致。");
+    if (typeof metadata.fetchedAt !== "string" || !Number.isFinite(Date.parse(metadata.fetchedAt))) {
+      throw new Error("本地元数据缺少有效的获取时间。");
+    }
+    if (!Array.isArray(metadata.papers) || !Number.isInteger(metadata.paperCount)
+      || metadata.paperCount < 1 || metadata.papers.length !== metadata.paperCount) {
+      throw new Error("本地元数据的论文数量不完整。");
+    }
+    const ids = new Set();
+    const strings = ["id", "title", "abstract", "keywords", "tldr", "doi", "url", "pdfURL", "bibtex"];
+    for (const paper of metadata.papers) {
+      if (!paper || strings.some(field => typeof paper[field] !== "string")
+        || !paper.id.trim() || !paper.title.trim() || paper.year !== year || paper.venueID !== venueID
+        || !Array.isArray(paper.authors) || paper.authors.some(author => typeof author !== "string")) {
+        throw new Error("本地元数据包含格式异常或会议、年份不一致的论文。");
+      }
+      if (ids.has(paper.id)) throw new Error("本地元数据包含重复的 OpenReview ID。");
+      ids.add(paper.id);
+      if (paper.url !== `https://openreview.net/forum?id=${encodeURIComponent(paper.id)}`
+        || (paper.pdfURL && (!URL.canParse(paper.pdfURL) || !["http:", "https:"].includes(new URL(paper.pdfURL).protocol)))) {
+        throw new Error("本地元数据包含无效的论文链接。");
+      }
+    }
+    return metadata;
+  }
+
+  async function fetchAccepted(year, { request, signal, onProgress = () => {} }) {
+    validateYear(year);
     const venueID = `ICML.cc/${year}/Conference`;
     const papers = [], ids = new Set();
     let count;
@@ -155,6 +190,6 @@ var Search4PaperCore = (() => {
   }
 
   return { FIELDS, words, phraseMatches, splitTerms, validateQuery, matchPaper, normalizeNote,
-    fetchAccepted, identities, evidenceNote };
+    validateYear, validateMetadata, fetchAccepted, identities, evidenceNote };
 })();
 if (typeof module !== "undefined") module.exports = Search4PaperCore;
