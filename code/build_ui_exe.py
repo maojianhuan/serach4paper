@@ -62,6 +62,8 @@ def _run_pyinstaller(name: str, dist_dir: Path, build_temp: Path) -> None:
         "--hidden-import",
         "code.query_research_topic",
         f"--add-data={PROJECT_ROOT / 'code' / 'ccf_a_conferences.json'}{separator}code",
+        "--hidden-import=code.fetch_venue_metadata",
+        f"--add-data={PROJECT_ROOT / 'code' / 'ccf_venues.json'}{separator}code",
         str(ENTRYPOINT),
     ]
 

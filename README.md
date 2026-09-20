@@ -17,7 +17,26 @@ search4paper 是一个面向文献调研的论文抓取、本地检索和论文�
 - KDD
 - WWW / The Web Conference
 
-项目同时保留了部分 CCF A 类其他会议和期刊的配置，但它们不是当前核心使用场景。
+现已扩展至 CCF 第七版国际推荐目录的全部 A/B/C 会议与期刊：386 个会议、291 个独立期刊，共 677 个来源。多学科重复列出的期刊合并为一个来源，保留全部学科标签。上述六个会议继续使用原有专用采集规则。
+
+### 全目录检索与全文访问
+
+抓取页和搜索页均可点击 **CCF 目录**，按 A/B/C、会议/期刊、学科和名称筛选，使用 Ctrl/Shift 多选或“全选当前筛选”，最后点击“使用所选目录”。抓取时指定年份，完成后在搜索页选择同一范围。界面的 `ALL` 快捷项仍指上述六个核心会议，避免意外抓取整个目录。CLI 的 `--conference ALL` 则选择全部 677 个来源，建议按需指定具体标识。加载主题配置时，以配置里的 targets 为准。
+
+新增来源使用 DBLP 已出版书目；少数不在 DBLP 目录中的期刊按 ISSN 使用 Crossref。期刊无需订阅账号即可检索公开书目信息。DBLP 年份是记录的出版年份；Crossref 使用 `published` 最早发表年份，可能早于纸刊年份。完整分页、来源身份和年份检查通过后才写入成功快照；来源为空或验证无法完成时明确报错，不作为“该年没有论文”。会议来源按 DBLP 返回的 stream 查询范围确认归属，同时保留其中以期刊形式出版的论文；不会用记录编号前缀误排除这些论文。书目不是实时录用名单，也未逐篇认证 CCF 正式长文资格。
+
+搜索结果可以通过界面：
+
+- **查找开放全文**：输入联系邮箱，按 DOI 查询 Unpaywall，展示开放链接和版本；邮箱只随请求发送，不保存。结果仅在本次会话和主动导出的文件中保留。
+- **下载选中 PDF**：有直接 PDF 链接时下载；只有开放落地页时使用“打开论文网页”。
+- **关联本地 PDF**：选择单篇论文，关联通过机构订阅等方式自行下载的 PDF。关联记录保存在论文目录的 `enrichment/pdf_manifest.jsonl`；原 PDF 不会复制或修改，移动文件后需要重新关联。
+- **覆盖范围**：分别显示论文数、摘要缺失数、本地全文数及来源警告。未发现开放版本或下载失败不等于确认存在付费墙。
+
+目录依据 [CCF 官方第七版目录说明](https://www.ccf.org.cn/Academic_Evaluation/By_category/)、[目录 PDF 镜像](https://scdm-shu.github.io/ccf/2026-CCF-Ranking.pdf)，与 [CCF 分类转录](https://ccf.atom.im/)交叉核对。版本、原始链接、页码、学科和来源映射保存在 `code/ccf_venues.json`。它是必须随程序分发的公共资源，不属于个人 `configs/`。本轮不包含中文 T1/T2/T3 目录。
+
+验证范围：目录条目与离线采集逻辑已测试；Crossref JATS 2024 年实测获取 35 条论文记录。DBLP 已支持本次遇到的 Anubis 等待跳转验证：同一采集会话在内存中保留 Cookie，按页面指定时间等待，界面显示验证进度；无需导入浏览器凭据。最多处理两次验证跳转，单次等待最多 10 秒，遇到其他验证类型或反复验证时明确报错。实测通过验证并采集 TODS 2025 年 17 条论文记录，但尚未完成全部来源、年份的联网验证。NCMMSC 按会议名查询，流标识尚未核实；EITEE 使用前身 FITEE 的已注册 ISSN，更名后的覆盖仍需核验，这些限制随采集报告保留。
+
+Windows 打包脚本已包含新目录和采集模块。**仓库现有 EXE 尚未重新构建，不包含本轮功能**；需要在 Windows 重新打包并完成实际操作验收后发布。
 
 典型工作流：
 
@@ -222,6 +241,19 @@ python -m code.query_research_topic --config configs/my_topic.json --output-dir 
 个人检索配置 `configs/` 和生成结果 `research_results/` 均被 Git 忽略；
 这些目录及示例配置文件需要在本地创建。
 
+### 阅读搜索结果
+
+在“论文结果”页可按年份升序/降序、标题 A–Z/Z–A 排序，并组合勾选“仅缺摘要”和“仅已有本地 PDF”。
+PDF 筛选要求文件实际存在；搜索会读取已有下载记录。筛选只改变显示列表，覆盖范围和整体导出仍对应完整搜索结果。
+隐藏的论文会取消选中，选中项导出按当前列表顺序排列。
+
+选中论文后，“摘要与命中依据”页会用黄色高亮标题和摘要中实际命中的词组，支持大小写、连字符及词形变体。
+标题查询只高亮正向命中，不高亮 NOT 排除词；摘要更新后，需要重新搜索才会恢复命中高亮。
+“打开论文网页”和“打开本地 PDF”每次操作一篇选中论文，通过系统默认浏览器或阅读器打开；无链接或文件缺失时明确提示。
+
+“导出选中阅读清单”将当前可见且选中的论文导出为 Markdown，包含标题、会议、年份、作者、摘要及已有网页/PDF链接。
+缺失摘要会标明“未提供摘要”；本地 PDF 链接只在相应文件可访问的机器上有效。
+
 ### 项目结构
 
 ```text
@@ -271,7 +303,7 @@ The primary conferences are:
 - KDD
 - WWW / The Web Conference
 
-Additional CCF A conferences and journals remain available through the bundled catalog, but they are secondary to the six conferences above.
+The bundled seventh-edition CCF international catalogue now includes all A/B/C venues: 386 conferences and 291 distinct journals. Multi-field journal listings are merged while preserving their fields. The six core conferences retain their specialized collection rules.
 
 Typical workflow:
 
@@ -480,6 +512,22 @@ python -m code.query_research_topic --config configs/my_topic.json --output-dir 
 Use `--snapshot-output-root` to select a snapshot directory (default: `output/`).
 Personal configurations in `configs/` and generated results in `research_results/`
 are ignored by Git; create these directories and the example configuration locally.
+
+### Reading search results
+
+The results tab offers ascending/descending year and title sorting and combinable filters for missing abstracts
+and existing local PDFs. PDF filtering checks actual files and restores existing download records on search.
+Filters only change the visible list; coverage and full-result exports still describe the complete search.
+Hidden rows are deselected, and selected-row exports follow the visible sort order.
+
+The detail tab highlights actual title/abstract matches in yellow, including case, hyphen and inflection variants.
+Title queries only highlight positive matches, not NOT terms. After abstract enrichment, search again to restore
+current highlighting. Open the selected paper's webpage or local PDF with the system browser/reader;
+these actions require exactly one selected paper and report missing links/files.
+
+Export selected reading list writes Markdown containing visible selected papers' titles, venues, years,
+authors, abstracts and available webpage/PDF links. Missing abstracts are explicitly marked.
+Local PDF links only work on machines where those files are accessible.
 
 ### Repository layout
 

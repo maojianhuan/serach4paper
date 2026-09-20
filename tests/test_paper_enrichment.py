@@ -8,6 +8,46 @@ from code import paper_enrichment as enrichment
 
 
 class PaperEnrichmentTests(unittest.TestCase):
+    def test_reading_list_preserves_selection_order_and_escapes_markdown(self):
+        rows = [{"title": "A [test] *paper*", "abstract": "Use <memory> and [tools].",
+                 "source_url": "https://example.test/a paper(x)", "conference": "ICLR", "year": 2025},
+                {"title": "Second paper"}]
+        with tempfile.TemporaryDirectory() as directory:
+            output = enrichment.export_reading_list(rows, Path(directory) / "reading.md")
+            text = output.read_text(encoding="utf-8")
+        self.assertIn(r"A \[test\] \*paper\*", text)
+        self.assertIn(r"Use \<memory\> and \[tools\].", text)
+        self.assertIn("https://example.test/a%20paper%28x%29", text)
+        self.assertLess(text.index("## 1."), text.index("## 2."))
+        self.assertIn("未提供摘要", text)
+
+    def test_reading_list_keeps_publisher_and_open_access_links(self):
+        row = dict(title='Journal paper', source_url='https://doi.org/10.1/example',
+                   oa_landing_url='https://repository.example/article',
+                   oa_pdf_url='https://repository.example/paper.pdf', oa_version='acceptedVersion')
+        with tempfile.TemporaryDirectory() as directory:
+            output = enrichment.export_reading_list([row], Path(directory) / 'reading.md').read_text()
+        for field in ('source_url', 'oa_landing_url', 'oa_pdf_url', 'oa_version'):
+            self.assertIn(row[field], output)
+        self.assertNotIn('None', output)
+
+    def test_cached_pdf_requires_existing_file_and_does_not_write(self):
+        row = {"conference": "ICLR", "year": 2025, "openreview_id": "one"}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            key = enrichment.paper_key(row)
+            manifest = root / "enrichment" / "pdf_manifest.jsonl"
+            enrichment.collector.write_jsonl(manifest, [{"paper_id": key, "status": "downloaded"}])
+            self.assertNotIn("pdf_local_path", enrichment.load_cached_pdfs([row], root)[0])
+            pdf = root / "enrichment" / "pdf" / f"{key}.pdf"
+            pdf.parent.mkdir()
+            pdf.write_bytes(b"%PDF-1.4 test")
+            before = manifest.read_bytes()
+            restored = enrichment.load_cached_pdfs([row], root)[0]
+            self.assertEqual(restored["pdf_local_path"], str(pdf.resolve()))
+            self.assertEqual(restored["pdf_status"], "downloaded")
+            self.assertEqual(manifest.read_bytes(), before)
+
     def test_local_abstract_is_normalized_and_cached(self):
         row = {
             "conference": "ICLR",

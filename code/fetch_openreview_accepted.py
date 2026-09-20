@@ -12,9 +12,9 @@ decision list.
 
 Supported conference arguments
 ------------------------------
-Every CCF 2026 A-class conference bundled in ``ccf_a_conferences.json`` is
-accepted, including the historical aliases ``NEURIPS`` and ``KDD``. ``ALL``
-selects the whole bundled CCF A catalog.
+All CCF seventh-edition A/B/C conferences and journals in ``ccf_venues.json``
+are accepted, including historical aliases ``NEURIPS`` and ``KDD``. CLI ``ALL``
+selects the entire catalogue; the GUI retains its six-core-venue shortcut.
 
 Examples
 --------
@@ -40,6 +40,10 @@ import json
 import re
 import sys
 import time
+import threading
+from contextlib import contextmanager
+from html.parser import HTMLParser
+from http.cookiejar import CookieJar
 import xml.etree.ElementTree as ET
 from collections import Counter
 from dataclasses import dataclass, replace
@@ -48,7 +52,7 @@ from pathlib import Path
 from typing import Any, Iterable
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import Request, urlopen, build_opener, HTTPCookieProcessor
 
 
 OPENREVIEW_SEARCH_URL = "https://api2.openreview.net/notes/search"
@@ -131,6 +135,9 @@ class ConferenceSpec:
     ccf_category: str = ""
     ccf_type: str = ""
     ccf_professional_field: str = ""
+    issns: tuple[str, ...] = ()
+    venue_filter: str = ""
+    mapping_note: str = ""
 
     def venue_id(self, year: int) -> str:
         return f"{self.venue_prefix}/{year}/Conference"
@@ -526,6 +533,39 @@ def register_ccf_a_conferences() -> None:
 
 register_ccf_a_conferences()
 
+
+def load_ccf_catalog() -> dict[str, Any]:
+    payload = json.loads(bundled_resource_path("ccf_venues.json").read_text(encoding="utf-8"))
+    entries = payload["venues"]
+    keys = [entry["key"] for entry in entries]
+    if len(keys) != len(set(keys)) or len(keys) != payload["unique_venue_count"]:
+        raise RuntimeError("Invalid CCF catalogue: duplicate keys or incorrect count")
+    for entry in entries:
+        if entry["category"] not in {"A", "B", "C"} or entry["type"] not in {"会议", "期刊"}:
+            raise RuntimeError(f"Invalid CCF classification: {entry['key']}")
+        if not (entry["dblp_collection"] or entry["issns"] or entry["venue_filter"]):
+            raise RuntimeError(f"Missing metadata source: {entry['key']}")
+    return payload
+
+
+CCF_CATALOG = load_ccf_catalog()
+for _entry in CCF_CATALOG["venues"]:
+    _key = _entry["key"]
+    if _key not in CONFERENCE_SPECS:
+        CONFERENCE_SPECS[_key] = ConferenceSpec(
+            key=_key, display_name=_entry["full_name"], source_kind=_entry["source_kind"],
+            dblp_collection=_entry["dblp_collection"], issns=tuple(_entry["issns"]),
+            venue_filter=_entry["venue_filter"], mapping_note=_entry["mapping_note"],
+            ccf_abbreviation=_entry["abbreviation"], ccf_category=_entry["category"],
+            ccf_type=_entry["type"], ccf_professional_field=_entry["professional_field"],
+        )
+    CONFERENCE_ALIASES[_key.upper()] = _key
+# Only unambiguous new abbreviations become aliases. Existing names stay stable.
+for _entry in CCF_CATALOG["venues"]:
+    _alias = _entry["abbreviation"].strip().upper()
+    if _alias and sum(e["abbreviation"].strip().upper() == _alias for e in CCF_CATALOG["venues"]) == 1:
+        CONFERENCE_ALIASES.setdefault(_alias, _entry["key"])
+
 # Reference counts are diagnostic only. They never determine membership.
 REFERENCE_COUNTS: dict[tuple[str, int], dict[str, int]] = {
     ("ICLR", 2026): {
@@ -552,6 +592,9 @@ CSV_FIELDS = [
     "doi",
     "paper_url",
     "booktitle",
+    "volume",
+    "issue",
+    "pages",
     "venueid",
     "openreview_id",
     "submission_number",
@@ -624,6 +667,50 @@ def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+_dblp_access = threading.local()
+DBLP_HOSTS = {"dblp.org", "dblp.uni-trier.de", "dblp1.uni-trier.de", "dblp.dagstuhl.de"}
+
+
+@contextmanager
+def dblp_access_session(progress=None):
+    """Keep verification cookies in memory and progress local to this fetch thread."""
+    previous = getattr(_dblp_access, "session", None)
+    _dblp_access.session = (build_opener(HTTPCookieProcessor(CookieJar())), progress)
+    try:
+        yield
+    finally:
+        _dblp_access.session = previous
+
+
+class _RefreshParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.refresh = None
+
+    def handle_starttag(self, tag, attrs):
+        values = dict(attrs)
+        if tag == "meta" and (values.get("http-equiv") or "").casefold() == "refresh":
+            self.refresh = values.get("content")
+
+
+def _dblp_challenge_refresh(raw: bytes, response_url: str):
+    if b"anubis_challenge" not in raw:
+        return None
+    parser = _RefreshParser()
+    parser.feed(raw.decode("utf-8", errors="replace"))
+    match = re.fullmatch(r"\s*(\d+)\s*;\s*url\s*=\s*(.+?)\s*", parser.refresh or "", re.I)
+    if not match:
+        raise RuntimeError("DBLP 返回了暂不支持的访问验证；未取得论文数据。请在浏览器检查访问状态。")
+    delay = int(match[1])
+    target = urljoin(response_url, match[2].strip("\"'"))
+    source, destination = urlparse(response_url), urlparse(target)
+    if (delay > 10 or source.hostname not in DBLP_HOSTS
+            or (destination.scheme, destination.netloc) != (source.scheme, source.netloc)
+            or destination.path != "/.within.website/x/cmd/anubis/api/pass-challenge"):
+        raise RuntimeError("DBLP 验证等待时间或跳转地址不符合已支持的验证流程；已停止采集。")
+    return delay, target
+
+
 def request_bytes(
     url: str,
     *,
@@ -632,28 +719,41 @@ def request_bytes(
 ) -> tuple[bytes, dict[str, str]]:
     """Fetch a public URL with bounded retries and return bytes plus headers."""
     last_error: Exception | None = None
+    is_dblp = urlparse(url).hostname in DBLP_HOSTS
+    if is_dblp:
+        if getattr(_dblp_access, "session", None) is None:
+            _dblp_access.session = (build_opener(HTTPCookieProcessor(CookieJar())), None)
+        opener, progress = _dblp_access.session
     for attempt in range(retries):
-        req = Request(
-            url,
-            headers={
-                "User-Agent": USER_AGENT,
-                "Accept": "application/json,text/plain;q=0.9,*/*;q=0.1",
-            },
-        )
         try:
-            with urlopen(req, timeout=timeout) as response:
-                raw = response.read()
-                headers = {
-                    "url": response.geturl(),
-                    "status": str(getattr(response, "status", 200)),
-                    "content_type": response.headers.get("Content-Type", ""),
-                    "content_length_header": response.headers.get(
-                        "Content-Length", ""
-                    ),
-                    "etag": response.headers.get("ETag", ""),
-                    "last_modified": response.headers.get("Last-Modified", ""),
-                }
-                return raw, headers
+            current_url = url
+            for hop in range(3):
+                req = Request(current_url, headers={
+                    "User-Agent": USER_AGENT,
+                    "Accept": "application/json,text/plain;q=0.9,*/*;q=0.1",
+                })
+                open_request = opener.open if is_dblp else urlopen
+                with open_request(req, timeout=timeout) as response:
+                    raw = response.read()
+                    headers = {
+                        "url": response.geturl(),
+                        "status": str(getattr(response, "status", 200)),
+                        "content_type": response.headers.get("Content-Type", ""),
+                        "content_length_header": response.headers.get("Content-Length", ""),
+                        "etag": response.headers.get("ETag", ""),
+                        "last_modified": response.headers.get("Last-Modified", ""),
+                    }
+                refresh = _dblp_challenge_refresh(raw, headers["url"]) if is_dblp else None
+                if refresh is None:
+                    return raw, headers
+                if hop == 2:
+                    raise RuntimeError("DBLP 访问验证反复出现；此次采集未完成，请稍后重试。")
+                delay, current_url = refresh
+                if progress:
+                    progress(f"正在等待 DBLP 访问验证（{delay} 秒）…")
+                time.sleep(delay)
+                if progress:
+                    progress("正在完成 DBLP 访问验证并继续采集…")
         except HTTPError as exc:
             last_error = exc
             body = exc.read().decode("utf-8", errors="replace")
@@ -2877,6 +2977,11 @@ def build_conference_outputs(
         return build_official_then_dblp_outputs(output_root, spec=spec, year=year)
     if spec.source_kind == "dblp":
         return build_dblp_conference_outputs(output_root, spec=spec, year=year)
+    if spec.source_kind in {"dblp_stream", "crossref_journal"}:
+        if not __package__:
+            sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        from code.fetch_venue_metadata import build_outputs
+        return build_outputs(output_root, spec=spec, year=year)
 
     conference_dir = output_root / str(year) / spec.key
     conference_dir.mkdir(parents=True, exist_ok=True)
@@ -3128,6 +3233,7 @@ def build_combined_outputs(
     output_root: Path,
     *,
     year: int,
+    requested_keys: list[str],
     manifests: dict[str, dict[str, Any]],
     csv_rows: list[dict[str, Any]],
     jsonl_rows: list[dict[str, Any]],
@@ -3171,7 +3277,7 @@ def build_combined_outputs(
         "dataset": f"Combined collected conference papers for {year}",
         "year": year,
         "fetched_at_utc": utc_now(),
-        "conferences_requested": list(CONFERENCE_SPECS),
+        "conferences_requested": list(requested_keys),
         "conferences_completed": sorted(manifests),
         "conference_counts": conference_counts,
         "total_accepted": len(csv_rows),
@@ -3321,6 +3427,7 @@ def main(argv: list[str] | None = None) -> int:
         combined_manifest = build_combined_outputs(
             output_root,
             year=args.year,
+            requested_keys=selected_keys,
             manifests=manifests,
             csv_rows=combined_csv_rows,
             jsonl_rows=combined_jsonl_rows,
@@ -3333,7 +3440,7 @@ def main(argv: list[str] | None = None) -> int:
         "conference_argument": args.conference,
         "completed": {
             key: {
-                "venue_id": manifest["venue_id"],
+                "venue_id": manifest.get("venue_id", ""),
                 "accepted": manifest["counts"].get(
                     "accepted_paper_count",
                     manifest["counts"].get("openreview_current_accepted", 0),

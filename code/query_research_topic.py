@@ -27,7 +27,9 @@ DEFAULT_SNAPSHOT_ROOT = PROJECT_ROOT / "output"
 
 SEARCH_FIELDS = ("title", "abstract", "keywords", "tldr")
 CANDIDATE_FIELDS = [
-    "conference", "year", "title", "authors", "abstract", "keywords", "tldr",
+    "conference", "conference_display_name", "ccf_category", "ccf_type", "ccf_professional_field",
+    "doi", "volume", "issue", "pages", "pdf_status", "pdf_local_path",
+    "oa_status", "oa_pdf_url", "oa_landing_url", "oa_version", "year", "title", "authors", "abstract", "keywords", "tldr",
     "primary_area", "secondary_area", "topic", "openreview_id",
     "source_record_id", "source_url", "openreview_url", "paper_url", "pdf_url",
     "matched_query_groups", "matched_terms", "matched_fields", "matched_snippets",
@@ -65,17 +67,33 @@ def phrase_matches(text: Any, term: str) -> bool:
     )
 
 
+def phrase_match_spans(text: str, term: str, *, exact: bool = False) -> list[tuple[int, int]]:
+    """Locate actual source spans using the same token rules as topic retrieval."""
+    wanted = tokenize(term)
+    if not wanted:
+        return []
+    normalized, positions = [], []
+    for index, character in enumerate(text):
+        for part in unicodedata.normalize("NFKD", character.casefold()):
+            if not unicodedata.combining(part):
+                normalized.append(part)
+                positions.append(index)
+    tokens = [(match.group(), positions[match.start()], positions[match.end() - 1] + 1)
+              for match in re.finditer(r"[a-z0-9]+", "".join(normalized))]
+    return [(tokens[index][1], tokens[index + len(wanted) - 1][2])
+            for index in range(len(tokens) - len(wanted) + 1)
+            if all((term_token == tokens[index + offset][0] if exact
+                    else token_matches(term_token, tokens[index + offset][0]))
+                   for offset, term_token in enumerate(wanted))]
+
+
 def matched_snippet(text: Any, term: str, *, limit: int = 260) -> str:
     """Return a short source excerpt near a matched term without inventing text."""
     source = re.sub(r"\s+", " ", str(text or "")).strip()
     if len(source) <= limit:
         return source
-    wanted = tokenize(term)
-    tokens = [(token, match.start()) for match in re.finditer(r"[^\W_]+", source)
-              for token in tokenize(match.group())]
-    center = next((tokens[index][1] for index in range(len(tokens) - len(wanted) + 1)
-                   if wanted and all(token_matches(term_token, tokens[index + offset][0])
-                                     for offset, term_token in enumerate(wanted))), 0)
+    spans = phrase_match_spans(source, term)
+    center = spans[0][0] if spans else 0
     start = max(0, center - limit // 3)
     end = min(len(source), start + limit)
     prefix = "..." if start else ""

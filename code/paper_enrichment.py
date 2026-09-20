@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 from . import fetch_openreview_accepted as collector
@@ -110,6 +110,51 @@ def load_cached_abstracts(
 
 def _write_jsonl_map(path: Path, values: dict[str, dict[str, Any]]) -> None:
     collector.write_jsonl(path, [values[key] for key in sorted(values)])
+
+
+def load_cached_pdfs(rows: Iterable[dict[str, Any]], output_root: Path) -> list[dict[str, Any]]:
+    """Restore download information only for PDFs still present in the library."""
+    cache = _read_jsonl_map(_enrichment_root(output_root) / "pdf_manifest.jsonl", strict=True)
+    result = []
+    for source in rows:
+        row = dict(source)
+        cached = cache.get(paper_key(row), {})
+        path = _enrichment_root(output_root) / "pdf" / f"{paper_key(row)}.pdf"
+        if cached.get("status") == "linked":
+            path = Path(cached["local_path"])
+        if cached.get("status") in {"downloaded", "linked"} and path.is_file():
+            row.update(pdf_status=cached["status"], pdf_local_path=str(path.resolve()),
+                       pdf_url_resolved=cached.get("final_url") or cached.get("requested_url", ""),
+                       pdf_sha256=cached.get("sha256", ""))
+        result.append(row)
+    return result
+
+
+def export_reading_list(rows: Iterable[dict[str, Any]], output_path: Path) -> Path:
+    """Write selected papers as a human-readable Markdown reading list."""
+    def escape(value: Any) -> str:
+        text = _as_text(value).replace("\r", " ").replace("\n", " ")
+        return re.sub(r"([\\`*_{}\[\]()<>#!|])", r"\\\1", text)
+
+    lines = ["# 论文阅读清单", ""]
+    for index, row in enumerate(rows, 1):
+        lines.extend([f"## {index}. {escape(row.get('title'))}", "",
+                      f"会议或期刊 / 年份：{escape(row.get('conference'))} / {escape(row.get('year'))}", "",
+                      f"作者：{escape(row.get('authors')) or '未提供'}", "",
+                      "摘要：", "", escape(row.get("abstract")) or "未提供摘要", ""])
+        for label, url in (("论文网页", row.get("source_url") or row.get("paper_url") or row.get("openreview_url")),
+                           ("PDF", row.get("pdf_url_resolved") or row.get("pdf_url")),
+                           ("开放全文页面", row.get("oa_landing_url")),
+                           ("开放 PDF", row.get("oa_pdf_url"))):
+            if url:
+                lines.extend([f"[{label}](<{quote(str(url), safe=':/?=&%#@+;,~') }>)", ""])
+        if row.get("oa_version"):
+            lines.extend([f"开放版本：{escape(row['oa_version'])}", ""])
+        local = _as_text(row.get("pdf_local_path"))
+        if local and Path(local).is_file():
+            lines.extend([f"[本地 PDF](<{Path(local).resolve().as_uri()}>)", ""])
+    output_path.write_text("\n".join(lines), encoding="utf-8")
+    return output_path
 
 
 def _abstract_from_openreview(payload: Any) -> str:
@@ -295,10 +340,10 @@ def enrich_abstracts(
 
 
 def resolve_pdf_url(row: dict[str, Any]) -> str:
-    for field in ("pdf_url", "paper_url"):
+    for field in ("oa_pdf_url", "pdf_url", "paper_url"):
         value = _as_text(row.get(field))
         if value.casefold().startswith(("http://", "https://")):
-            if field == "pdf_url" or value.casefold().split("?", 1)[0].endswith(".pdf"):
+            if field in {"oa_pdf_url", "pdf_url"} or value.casefold().split("?", 1)[0].endswith(".pdf"):
                 return value
     openreview_id = _as_text(row.get("openreview_id"))
     if openreview_id:
@@ -394,9 +439,12 @@ def download_pdfs(
         key = paper_key(row)
         cached = manifest.get(key)
         target = pdf_dir / f"{key}.pdf"
-        if cached and cached.get("status") == "downloaded" and target.is_file() and not refresh:
+        if cached and cached.get("status") == "linked":
+            target = Path(cached["local_path"])
+        if cached and cached.get("status") in {"downloaded", "linked"} and target.is_file() and not refresh:
             result = cached
         else:
+            target = pdf_dir / f"{key}.pdf"
             url = resolve_pdf_url(row)
             if not url:
                 result = {
@@ -423,7 +471,7 @@ def download_pdfs(
         row["pdf_sha256"] = result.get("sha256", "")
         row["pdf_error"] = result.get("error", "")
         results.append(row)
-        if result.get("status") != "downloaded":
+        if result.get("status") not in {"downloaded", "linked"}:
             failures[key] = result.get("error") or result.get("status", "failed")
 
     _write_jsonl_map(manifest_path, manifest)
@@ -447,6 +495,11 @@ def export_ai_jsonl(
                 "paper_id": paper_key(row),
                 "conference": row.get("conference", ""),
                 "conference_display_name": row.get("conference_display_name", ""),
+                "ccf_category": row.get("ccf_category", ""),
+                "ccf_type": row.get("ccf_type", ""),
+                "doi": row.get("doi", ""),
+                "oa_status": row.get("oa_status", ""),
+                "oa_version": row.get("oa_version", ""),
                 "year": row.get("year", ""),
                 "title": row.get("title", ""),
                 "authors": authors,
@@ -467,6 +520,8 @@ def export_ai_jsonl(
                     "pdf": row.get("pdf_url_resolved") or row.get("pdf_url", ""),
                     "openreview": row.get("openreview_url", ""),
                     "virtual": row.get("virtual_url", ""),
+                    "oa_pdf": row.get("oa_pdf_url", ""),
+                    "oa_landing": row.get("oa_landing_url", ""),
                 },
                 "local_files": {
                     "pdf_path": row.get("pdf_local_path", ""),
@@ -486,3 +541,47 @@ def export_ai_jsonl(
         )
     collector.write_jsonl(output_path, records)
     return output_path
+
+
+def link_local_pdf(row: dict[str, Any], path: Path, output_root: Path) -> dict[str, Any]:
+    """Associate a user-selected PDF without copying or altering its contents."""
+    path = path.expanduser().resolve()
+    with path.open("rb") as handle:
+        if not handle.read(1024).lstrip().startswith(b"%PDF-"):
+            raise ValueError("所选文件不是 PDF")
+    manifest_path = _enrichment_root(output_root) / "pdf_manifest.jsonl"
+    manifest = _read_jsonl_map(manifest_path, strict=True)
+    key = paper_key(row)
+    manifest[key] = dict(paper_id=key, title=row.get("title", ""), status="linked",
+                         local_path=str(path), linked_at=utc_now())
+    _write_jsonl_map(manifest_path, manifest)
+    return dict(row, pdf_status="linked", pdf_local_path=str(path), pdf_error="", pdf_sha256="")
+
+
+def lookup_open_access(row: dict[str, Any], email: str) -> dict[str, Any]:
+    """Locate an OA copy by DOI; absence/error is not evidence of a paywall."""
+    if "@" not in email or any(c.isspace() for c in email):
+        raise ValueError("Unpaywall requires a contact email")
+    result = dict(row, oa_status="no_doi", oa_pdf_url="", oa_landing_url="", oa_version="")
+    doi = _as_text(row.get("doi"))
+    doi = re.sub(r"^https?://(?:dx\.)?doi\.org/", "", doi, flags=re.I)
+    if not doi:
+        return result
+    url = "https://api.unpaywall.org/v2/" + quote(doi, safe="") + "?" + urlencode({"email": email})
+    request = Request(url, headers={"User-Agent": USER_AGENT})
+    try:
+        with urlopen(request, timeout=30) as response:
+            data = json.load(response)
+    except HTTPError as exc:
+        if exc.code == 404:
+            return dict(result, oa_status="not_found")
+        raise RuntimeError(f"Unpaywall 查询失败：HTTP {exc.code}") from None
+    except (URLError, TimeoutError, ValueError):
+        raise RuntimeError("Unpaywall 查询失败：网络或响应格式错误") from None
+    if str(data.get("doi", "")).casefold() != doi.casefold():
+        raise ValueError("Unpaywall returned a different DOI")
+    location = data.get("best_oa_location") or {}
+    return dict(result, oa_status="found" if location else "not_found",
+                oa_pdf_url=location.get("url_for_pdf") or "",
+                oa_landing_url=location.get("url_for_landing_page") or location.get("url") or "",
+                oa_version=location.get("version") or "")

@@ -12,9 +12,12 @@ import csv
 import json
 import os
 import sys
+import subprocess
+import webbrowser
+from urllib.parse import urlsplit
 import threading
 from pathlib import Path
-from tkinter import BOTH, END, LEFT, BooleanVar, StringVar, Tk, filedialog, messagebox
+from tkinter import BOTH, END, LEFT, BooleanVar, StringVar, Tk, Toplevel, filedialog, messagebox, simpledialog
 from tkinter import ttk
 from tkinter.scrolledtext import ScrolledText
 
@@ -22,6 +25,15 @@ from . import fetch_openreview_accepted as collector
 from . import paper_enrichment as enrichment
 from . import paper_search as search
 from . import query_research_topic as topic
+
+
+def filter_catalog(rank="全部", venue_type="全部", field="全部", query="") -> list[dict]:
+    query = query.strip().casefold()
+    return [entry for entry in collector.CCF_CATALOG["venues"]
+            if (rank == "全部" or entry["category"] == rank)
+            and (venue_type == "全部" or entry["type"] == venue_type)
+            and (field == "全部" or field in entry["professional_fields"])
+            and (not query or query in (entry["key"] + " " + entry["abbreviation"] + " " + entry["full_name"]).casefold())]
 
 
 def _env(key: str, default: str) -> str:
@@ -41,7 +53,7 @@ UI_FETCHABLE_KEYS = tuple(
     collector.normalize_conference_argument(value)
     for value in UI_FETCHABLE_CONFERENCES
 )
-CONFERENCES = UI_FETCHABLE_CONFERENCES + ("ALL",)
+CONFERENCES = UI_FETCHABLE_CONFERENCES + ("ALL", "目录多选")
 YEAR_CHOICES = [""] + [str(y) for y in range(2000, 2031)]
 CURRENT_YEAR = "2026"
 DEFAULT_YEAR = _env("SEARCH4PAPER_UI_YEAR", CURRENT_YEAR)
@@ -53,7 +65,7 @@ DEFAULT_SEARCH_CONFERENCE = _env("SEARCH4PAPER_UI_SEARCH_CONFERENCE", DEFAULT_CO
 class PaperUI:
     def __init__(self, root: Tk) -> None:
         self.root = root
-        self.root.title("Conference Paper Collector")
+        self.root.title("Paper Collector")
         self.root.geometry("1180x760")
         self.root.minsize(980, 620)
 
@@ -76,6 +88,10 @@ class PaperUI:
         self.last_search_result = None
         self.last_search_request = None
         self.search_stale = False
+        self.only_missing_abstract = BooleanVar(value=False)
+        self.only_local_pdf = BooleanVar(value=False)
+        self.result_sort = StringVar(value="年份降序")
+        self.result_count = StringVar(value="显示 0 / 0 篇")
         self.search_busy = False
         self.status = StringVar(value="Ready")
         self.result_rows: dict[str, dict[str, object]] = {}
@@ -139,10 +155,10 @@ class PaperUI:
         top = ttk.Frame(self.root, style="Card.TLabelframe")
         top.pack(fill="x", padx=12, pady=(12, 6))
 
-        ttk.Label(top, text="Conference Paper Collector", style="Title.TLabel").pack(
+        ttk.Label(top, text="Paper Collector", style="Title.TLabel").pack(
             anchor="w", padx=12, pady=(10, 2)
         )
-        ttk.Label(top, text="抓取并检索本地会议论文元数据", style="Hint.TLabel").pack(
+        ttk.Label(top, text="抓取并检索会议与期刊论文元数据", style="Hint.TLabel").pack(
             anchor="w", padx=12, pady=(0, 10)
         )
 
@@ -166,7 +182,6 @@ class PaperUI:
         self.btn_search_page.pack(side=LEFT)
 
         self.content = ttk.Frame(self.root)
-        self.content.pack(fill=BOTH, expand=True, padx=12, pady=6)
 
         self.fetch_frame = ttk.Frame(self.content, padding=12)
         self.search_frame = ttk.Frame(self.content, padding=12)
@@ -178,7 +193,8 @@ class PaperUI:
             self.root,
             textvariable=self.status,
             style="Status.TLabel",
-        ).pack(fill="x", padx=12, pady=(0, 10))
+        ).pack(side="bottom", fill="x", padx=12, pady=(0, 10))
+        self.content.pack(fill=BOTH, expand=True, padx=12, pady=6)
 
         self._update_local_snapshot_summary()
 
@@ -201,7 +217,7 @@ class PaperUI:
         panel.pack(fill="x")
         panel.columnconfigure(1, weight=1)
 
-        ttk.Label(panel, text="会议", style="Section.TLabel").grid(row=0, column=0, sticky="w", pady=6)
+        ttk.Label(panel, text="会议/期刊", style="Section.TLabel").grid(row=0, column=0, sticky="w", pady=6)
         ttk.Combobox(
             panel,
             textvariable=self.fetch_conference,
@@ -209,6 +225,8 @@ class PaperUI:
             state="readonly",
             width=24,
         ).grid(row=0, column=1, sticky="w", pady=6)
+
+        ttk.Button(panel, text="选择 CCF 目录…", command=lambda: self._choose_venues("fetch")).grid(row=0, column=2, padx=10)
 
         ttk.Label(panel, text="年份（留空即默认 2026）", style="Section.TLabel").grid(
             row=1, column=0, sticky="w", pady=6
@@ -317,6 +335,7 @@ class PaperUI:
             box.pack(side=LEFT, padx=(0, 10))
             if label == "模式":
                 box.bind("<<ComboboxSelected>>", lambda _event: self._search_mode_changed())
+        ttk.Button(filters, text="CCF 目录…", command=lambda: self._choose_venues("search")).pack(side=LEFT)
         self.title_controls = ttk.Frame(panel)
         self.title_controls.grid(row=2, column=0, columnspan=3, sticky="ew")
         self.title_controls.columnconfigure(1, weight=1)
@@ -360,24 +379,43 @@ class PaperUI:
         notebook.pack(fill=BOTH, expand=True)
         self.result_panel = ttk.Frame(notebook)
         notebook.add(self.result_panel, text="论文结果")
+        view_bar = ttk.Frame(self.result_panel)
+        view_bar.grid(row=0, column=0, columnspan=2, sticky="ew", pady=4)
+        ttk.Checkbutton(view_bar, text="仅缺摘要", variable=self.only_missing_abstract, command=self._apply_result_view).pack(side=LEFT)
+        ttk.Checkbutton(view_bar, text="仅已有本地 PDF", variable=self.only_local_pdf, command=self._apply_result_view).pack(side=LEFT)
+        self.sort_box = ttk.Combobox(view_bar, textvariable=self.result_sort, state="readonly", width=12,
+                                    values=("年份降序", "年份升序", "标题 A–Z", "标题 Z–A"))
+        self.sort_box.pack(side=LEFT, padx=8)
+        self.sort_box.bind("<<ComboboxSelected>>", lambda _event: self._apply_result_view())
+        ttk.Label(view_bar, textvariable=self.result_count).pack(side=LEFT)
+        reading_bar = ttk.Frame(self.result_panel)
+        reading_bar.grid(row=1, column=0, columnspan=2, sticky="w", pady=4)
+        self.open_web_button = ttk.Button(reading_bar, text="打开论文网页", command=lambda: self._open_selected_paper("web"))
+        self.open_pdf_button = ttk.Button(reading_bar, text="打开本地 PDF", command=lambda: self._open_selected_paper("pdf"))
+        self.markdown_button = ttk.Button(reading_bar, text="导出选中阅读清单", command=self._export_reading_list)
+        self.oa_button = ttk.Button(reading_bar, text="查找开放全文", command=self._start_oa_lookup)
+        self.link_pdf_button = ttk.Button(reading_bar, text="关联本地 PDF", command=self._link_local_pdf)
+        for button in (self.open_web_button, self.open_pdf_button, self.markdown_button, self.oa_button, self.link_pdf_button):
+            button.pack(side=LEFT, padx=(0, 8))
         columns = ("conference", "year", "title", "authors", "abstract_status", "pdf_status", "source_url")
         self.results = ttk.Treeview(self.result_panel, columns=columns, show="headings", selectmode="extended")
-        for col, title, width in (("conference", "会议", 80), ("year", "年份", 70), ("title", "标题", 410),
+        for col, title, width in (("conference", "会议/期刊", 110), ("year", "年份", 70), ("title", "标题", 410),
                                   ("authors", "作者", 200), ("abstract_status", "摘要", 70), ("pdf_status", "PDF", 90), ("source_url", "来源", 220)):
             self.results.heading(col, text=title)
             self.results.column(col, width=width, anchor="w")
         yscroll = ttk.Scrollbar(self.result_panel, orient="vertical", command=self.results.yview)
         xscroll = ttk.Scrollbar(self.result_panel, orient="horizontal", command=self.results.xview)
         self.results.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
-        self.results.grid(row=0, column=0, sticky="nsew")
-        yscroll.grid(row=0, column=1, sticky="ns")
-        xscroll.grid(row=1, column=0, sticky="ew")
-        self.result_panel.rowconfigure(0, weight=1)
+        self.results.grid(row=2, column=0, sticky="nsew")
+        yscroll.grid(row=2, column=1, sticky="ns")
+        xscroll.grid(row=3, column=0, sticky="ew")
+        self.result_panel.rowconfigure(2, weight=1)
         self.result_panel.columnconfigure(0, weight=1)
         self.results.bind("<<TreeviewSelect>>", self._show_paper_details)
         self.coverage_view = ScrolledText(notebook, wrap="word", state="disabled")
         self.summary_view = ScrolledText(notebook, wrap="word", state="disabled")
         self.detail_view = ScrolledText(notebook, wrap="word", state="disabled")
+        self.detail_view.tag_configure("match", background="#ffe082", foreground="#111111")
         notebook.add(self.coverage_view, text="覆盖范围")
         notebook.add(self.summary_view, text="命中统计")
         notebook.add(self.detail_view, text="摘要与命中依据")
@@ -464,29 +502,249 @@ class PaperUI:
             except (OSError, ValueError) as exc:
                 messagebox.showerror("导出失败", str(exc))
 
-    def _show_paper_details(self, _event=None) -> None:
+    @staticmethod
+    def _has_local_pdf(row: dict) -> bool:
+        path = str(row.get("pdf_local_path", "")).strip()
+        return bool(path) and Path(path).is_file()
+
+    def _apply_result_view(self) -> None:
+        selected = set(self.results.selection())
+        items = list(self.result_rows)
+        order = self.result_sort.get()
+        if order.startswith("年份"):
+            items.sort(key=lambda item: (int(self.result_rows[item].get("year") or 0),
+                                         str(self.result_rows[item].get("title", "")).casefold()),
+                       reverse=order == "年份降序")
+        else:
+            items.sort(key=lambda item: str(self.result_rows[item].get("title", "")).casefold(),
+                       reverse=order == "标题 Z–A")
+        visible = []
+        for item in items:
+            row = self.result_rows[item]
+            if ((self.only_missing_abstract.get() and str(row.get("abstract", "")).strip())
+                    or (self.only_local_pdf.get() and not self._has_local_pdf(row))):
+                self.results.detach(item)
+            else:
+                self.results.move(item, "", "end")
+                visible.append(item)
+        self.results.selection_set([item for item in visible if item in selected])
+        self.result_count.set(f"显示 {len(visible)} / {len(items)} 篇（整体导出包含全部搜索结果）")
+        self._show_paper_details()
+
+    def _open_selected_paper(self, kind: str) -> None:
         selected = self._selected_result_rows()
-        if not selected:
+        if len(selected) != 1:
+            messagebox.showwarning("打开论文", "请选择一篇论文")
             return
         row = selected[0][1]
+        try:
+            if kind == "web":
+                url = str(row.get("oa_landing_url") or row.get("source_url") or row.get("paper_url") or row.get("openreview_url") or "").strip()
+                if urlsplit(url).scheme not in ("http", "https") or not urlsplit(url).netloc:
+                    raise ValueError("该论文没有有效的网页链接")
+                if not webbrowser.open(url):
+                    raise RuntimeError("无法启动默认浏览器")
+            else:
+                if not self._has_local_pdf(row):
+                    raise ValueError("未找到本地 PDF，请先下载该论文")
+                path = str(Path(row["pdf_local_path"]).resolve())
+                if sys.platform == "win32":
+                    os.startfile(path)
+                else:
+                    subprocess.run(["open" if sys.platform == "darwin" else "xdg-open", path], check=True)
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+            messagebox.showerror("打开失败", str(exc))
+
+    def _export_reading_list(self) -> None:
+        selected = self._selected_result_rows()
+        if not selected:
+            messagebox.showwarning("导出", "请先选择论文；只导出当前可见且选中的论文。")
+            return
+        path = filedialog.asksaveasfilename(title="导出选中阅读清单", initialfile="reading_list.md",
+                                          defaultextension=".md", filetypes=[("Markdown", "*.md")])
+        if path:
+            try:
+                enrichment.export_reading_list((row for _, row in selected), Path(path))
+                self.status.set(f"已导出 {len(selected)} 篇论文阅读清单：{path}")
+            except (OSError, ValueError) as exc:
+                messagebox.showerror("导出失败", str(exc))
+
+    def _show_paper_details(self, _event=None) -> None:
+        selected = self._selected_result_rows()
+        self.detail_view.tag_remove("match", "1.0", END)
+        if not selected:
+            self._set_text(self.detail_view, "请选择论文查看摘要与命中依据。")
+            return
+        row = selected[0][1]
+        title = str(row.get("title", ""))
+        abstract = str(row.get("abstract") or "缺少摘要")
+        prefix = f"{title}\n\n摘要来源：{row.get('abstract_source') or '原始快照/未提供'}\n{row.get('abstract_source_url', '')}\n\n"
         evidence = "\n".join(f"{hit.get('query_group', '')} | {hit.get('field', '')} | {hit.get('term', '')}\n{hit.get('text', '')}" for hit in row.get("matched_snippets", []))
-        self._set_text(self.detail_view, f"{row.get('title', '')}\n\n摘要来源：{row.get('abstract_source') or '原始快照/未提供'}\n{row.get('abstract_source_url', '')}\n\n{row.get('abstract') or '缺少摘要'}\n\n命中依据：\n{evidence}")
+        if self.search_stale:
+            evidence = "摘要已更新，请重新搜索后查看最新命中依据和高亮。"
+        self._set_text(self.detail_view, prefix + abstract + "\n\n命中依据：\n" + evidence + "\n\n全文状态："
+                       + str(row.get("oa_status", "未查询")) + "；版本：" + str(row.get("oa_version", "未知"))
+                       + "\n开放版本：" + str(row.get("oa_landing_url") or row.get("oa_pdf_url") or "未发现/未查询")
+                       + "\n本地 PDF：" + str(row.get("pdf_local_path") or "未关联")
+                       + "\n未发现开放版或下载失败不代表一定需要订阅；可打开论文网页，通过机构账号访问。")
+        if self.search_stale:
+            return
+        exact = (self.last_search_request or {}).get("config") is None
+        for hit in row.get("matched_snippets", []):
+            field, term = hit.get("field"), hit.get("term", "")
+            if field not in ("title", "abstract"):
+                continue
+            text, offset = (title, 0) if field == "title" else (abstract, len(prefix))
+            for start, end in topic.phrase_match_spans(text, term, exact=exact):
+                self.detail_view.tag_add("match", f"1.0+{offset + start}c", f"1.0+{offset + end}c")
+
+    def _choose_venues(self, purpose: str) -> None:
+        dialog = Toplevel(self.root)
+        dialog.title("CCF 第七版：A/B/C 会议与期刊")
+        dialog.geometry("1080x650")
+        bar = ttk.Frame(dialog, padding=8)
+        bar.pack(fill="x")
+        variables = [StringVar(dialog, value="全部") for _ in range(3)]
+        term = StringVar(dialog)
+        fields = sorted({field for entry in collector.CCF_CATALOG["venues"] for field in entry["professional_fields"]})
+        for label, variable, values, width in zip(("级别", "类型", "学科"), variables,
+                (("全部", "A", "B", "C"), ("全部", "会议", "期刊"), ["全部"] + fields), (6, 7, 36)):
+            ttk.Label(bar, text=label).pack(side=LEFT)
+            ttk.Combobox(bar, textvariable=variable, values=values, state="readonly", width=width).pack(side=LEFT, padx=5)
+        ttk.Entry(bar, textvariable=term, width=25).pack(side=LEFT, padx=5)
+        ttk.Label(dialog, text="输入简称或全名筛选；Ctrl/Shift 多选。筛选后仍保留已选项。ALL 快捷项仅代表原有六个核心会议。").pack(anchor="w", padx=8)
+        tree = ttk.Treeview(dialog, columns=("rank", "type", "name", "field"), show="tree headings", selectmode="extended")
+        tree.heading("#0", text="标识"); tree.column("#0", width=150)
+        for key, title, width in (("rank", "级别", 45), ("type", "类型", 50), ("name", "名称", 440), ("field", "学科", 280)):
+            tree.heading(key, text=title); tree.column(key, width=width)
+        scroll = ttk.Scrollbar(dialog, orient="vertical", command=tree.yview)
+        scroll.pack(side="right", fill="y")
+        tree.configure(yscrollcommand=scroll.set)
+        bottom = ttk.Frame(dialog, padding=8)
+        bottom.pack(side="bottom", fill="x")
+        tree.pack(fill=BOTH, expand=True)
+        selected = set(getattr(self, purpose + "_venues", []))
+        count = StringVar(dialog)
+        visible = set()
+        def remember():
+            selected.difference_update(visible)
+            selected.update(tree.selection())
+        def refresh(*_):
+            remember()
+            tree.delete(*tree.get_children())
+            visible.clear()
+            for entry in filter_catalog(variables[0].get(), variables[1].get(), variables[2].get(), term.get()):
+                key = entry["key"]
+                visible.add(key)
+                tree.insert("", END, iid=key, text=key, values=(entry["category"], entry["type"], entry["full_name"], entry["professional_field"]))
+            tree.selection_set(sorted(selected & visible))
+            count.set(f"显示 {len(visible)} / 677；已选 {len(selected)}")
+        def selection_changed(_event=None):
+            remember()
+            count.set(f"显示 {len(visible)} / 677；已选 {len(selected)}")
+        def apply():
+            remember()
+            if not selected:
+                messagebox.showwarning("选择目录", "请至少选择一个会议或期刊", parent=dialog)
+                return
+            setattr(self, purpose + "_venues", sorted(selected))
+            getattr(self, purpose + "_conference").set("目录多选")
+            self.status.set("已选目录：" + ", ".join(sorted(selected)))
+            if purpose == "fetch":
+                self._update_local_snapshot_summary()
+            dialog.destroy()
+        for variable in variables + [term]:
+            variable.trace_add("write", refresh)
+        tree.bind("<<TreeviewSelect>>", selection_changed)
+        ttk.Label(bottom, textvariable=count).pack(side=LEFT)
+        ttk.Button(bottom, text="全选当前筛选", command=lambda: tree.selection_set(tree.get_children())).pack(side=LEFT, padx=8)
+        ttk.Button(bottom, text="清空全部", command=lambda: (selected.clear(), tree.selection_remove(tree.selection()), selection_changed())).pack(side=LEFT)
+        ttk.Button(bottom, text="使用所选目录", command=apply).pack(side="right")
+        refresh()
+
+    def _update_access_result(self, item, updated) -> None:
+        row = self.result_rows[item]
+        delta = int(self._has_local_pdf(updated)) - int(self._has_local_pdf(row))
+        row.update(updated)
+        self._update_result_item(item, row)
+        if self.last_search_result and not self.search_stale:
+            for coverage in self.last_search_result["coverage"]:
+                if coverage["conference"] == row["conference"] and str(coverage["year"]) == str(row["year"]):
+                    coverage["local_pdf_count"] += delta
+            self._set_text(self.coverage_view, search.coverage_text(self.last_search_result))
+        self._show_paper_details()
+
+    def _link_local_pdf(self) -> None:
+        selected = self._selected_result_rows()
+        if len(selected) != 1:
+            messagebox.showwarning("关联 PDF", "请选择一篇论文，再关联你下载的 PDF。")
+            return
+        path = filedialog.askopenfilename(title="选择该论文的 PDF", filetypes=[("PDF", "*.pdf")])
+        if not path:
+            return
+        try:
+            item, row = selected[0]
+            updated = enrichment.link_local_pdf(row, Path(path), Path(self.output_root.get()).expanduser().resolve())
+            self._update_access_result(item, updated)
+            self._apply_result_view()
+            self.status.set("本地 PDF 已关联；可使用“打开本地 PDF”阅读。")
+        except (ValueError, OSError) as exc:
+            messagebox.showerror("关联 PDF 失败", str(exc))
+
+    def _start_oa_lookup(self) -> None:
+        selected = self._selected_result_rows()
+        if not selected:
+            messagebox.showwarning("开放全文", "请先选择论文。")
+            return
+        email = simpledialog.askstring("开放全文", "Unpaywall 要求联系邮箱（仅随此次查询发送，不保存）：", parent=self.root)
+        if not email:
+            return
+        if "@" not in email or any(c.isspace() for c in email):
+            messagebox.showerror("开放全文", "请输入有效邮箱。")
+            return
+        self._set_action_buttons("disabled")
+        self.status.set("正在按 DOI 查询开放全文…")
+        def worker():
+            try:
+                rows = [enrichment.lookup_open_access(row, email) for _, row in selected]
+                self.root.after(0, self._oa_done, selected, rows)
+            except Exception as exc:
+                self.root.after(0, self._action_error, "开放全文查询失败", str(exc))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _oa_done(self, selected, rows) -> None:
+        for (item, _), row in zip(selected, rows):
+            self._update_access_result(item, row)
+        self._set_action_buttons("normal")
+        found = sum(row.get("oa_status") == "found" for row in rows)
+        self.status.set(f"找到 {found}/{len(rows)} 篇开放版本。无结果不代表必须订阅；可打开论文网页通过机构访问。")
 
     def _selected_fetch_conferences(self, conference: str) -> list[str]:
+        if conference == "目录多选":
+            selected = list(getattr(self, "fetch_venues", []))
+            if not selected:
+                raise ValueError("请先从 CCF 目录选择会议或期刊")
+            return selected
         if conference == "ALL":
             return list(UI_FETCHABLE_KEYS)
         return [collector.normalize_conference_argument(conference)]
 
     def _target_search_conferences(self, conference: str) -> list[str]:
+        if conference == "目录多选":
+            selected = list(getattr(self, "search_venues", []))
+            if not selected:
+                raise ValueError("请先从 CCF 目录选择会议或期刊")
+            return selected
         if conference == "ALL":
             return list(UI_FETCHABLE_KEYS)
         return [collector.normalize_conference_argument(conference)]
 
     def _selected_result_rows(self) -> list[tuple[str, dict[str, object]]]:
+        selected = set(self.results.selection())
         return [
             (item_id, self.result_rows[item_id])
-            for item_id in self.results.selection()
-            if item_id in self.result_rows
+            for item_id in self.results.get_children()
+            if item_id in selected and item_id in self.result_rows
         ]
 
     def _row_abstract_status(self, row: dict[str, object]) -> str:
@@ -496,8 +754,12 @@ class PaperUI:
 
     def _row_pdf_status(self, row: dict[str, object]) -> str:
         status = str(row.get("pdf_status", "")).strip()
-        if status == "downloaded":
-            return "已下载"
+        if self._has_local_pdf(row):
+            return "本地已关联" if status == "linked" else "已下载"
+        if row.get("oa_status") == "found":
+            return "有开放链接"
+        if row.get("oa_status") == "not_found":
+            return "未发现开放版"
         if status in {"failed", "no_pdf_url"}:
             return "失败/无链接"
         if enrichment.resolve_pdf_url(row):
@@ -520,7 +782,8 @@ class PaperUI:
         )
 
     def _set_action_buttons(self, state: str) -> None:
-        for button in (self.abstract_button, self.export_button, self.pdf_button, self.search_button, self.report_button):
+        for button in (self.abstract_button, self.export_button, self.pdf_button, self.search_button, self.report_button,
+                       self.open_web_button, self.open_pdf_button, self.markdown_button, self.oa_button, self.link_pdf_button):
             button.config(state=state)
         if self.search_stale or self.last_search_result is None:
             self.report_button.config(state="disabled")
@@ -570,7 +833,7 @@ class PaperUI:
         self._set_action_buttons("normal")
         success_count = len(rows) - len(failures)
         self.status.set(f"摘要处理完成：成功 {success_count}，失败 {len(failures)}；重新搜索可更新候选与统计")
-        self._show_paper_details()
+        self._apply_result_view()
         if failures:
             messagebox.showwarning(
                 "摘要处理完成",
@@ -612,11 +875,11 @@ class PaperUI:
         failures: dict[str, str],
     ) -> None:
         for (item_id, _old_row), row in zip(selected, rows):
-            self.result_rows[item_id] = row
-            self._update_result_item(item_id, row)
+            self._update_access_result(item_id, row)
         self._set_action_buttons("normal")
         success_count = len(rows) - len(failures)
         self.status.set(f"PDF 处理完成：成功 {success_count}，失败 {len(failures)}")
+        self._apply_result_view()
         if failures:
             messagebox.showwarning(
                 "PDF 处理完成",
@@ -686,7 +949,8 @@ class PaperUI:
             self.local_status.insert("", END, values=("-", "-", "输出目录不存在"))
             return
 
-        for display_name, conference in zip(UI_FETCHABLE_CONFERENCES, UI_FETCHABLE_KEYS):
+        for conference in (getattr(self, "fetch_venues", []) if self.fetch_conference.get() == "目录多选" else UI_FETCHABLE_KEYS):
+            display_name = conference
             csv_path = output_root / str(year) / conference / f"{conference}_{year}_accepted_papers.csv"
             if csv_path.exists():
                 count = self._read_csv_count(csv_path)
@@ -713,6 +977,7 @@ class PaperUI:
         year_text = self.fetch_year.get().strip()
 
         try:
+            selected = self._selected_fetch_conferences(conference)
             year = collector.valid_year(year_text) if year_text else 2026
             output_root = Path(self.output_root.get().strip()).expanduser().resolve()
             if not str(output_root):
@@ -730,48 +995,51 @@ class PaperUI:
         refresh = self.refresh_existing.get()
         threading.Thread(
             target=self._fetch_worker,
-            args=(conference, year, output_root, refresh),
+            args=(conference, year, output_root, refresh, selected),
             daemon=True,
         ).start()
 
     def _fetch_worker(
-        self, conference: str, year: int, output_root: Path, refresh: bool = True
+        self, conference: str, year: int, output_root: Path, refresh: bool = True, selected: list[str] | None = None
     ) -> None:
         try:
-            selected = self._selected_fetch_conferences(conference)
+            selected = selected if selected is not None else self._selected_fetch_conferences(conference)
             manifests: dict[str, dict] = {}
             rows: list[dict] = []
             jsonl_rows: list[dict] = []
             failures: dict[str, str] = {}
 
-            for key in selected:
-                try:
-                    manifest, csv_rows, rich_rows = collector.build_conference_outputs(
-                        output_root,
-                        spec=collector.CONFERENCE_SPECS[key],
-                        year=year,
-                        page_size=1000,
-                        use_iclr_virtual=True,
-                        refresh=refresh,
-                        include_rows=True,
-                    )
-                    manifests[key] = manifest
-                    if manifest.get("collection_status") == "no_public_accepted_papers":
-                        failures[key] = (
-                            f"{key} {year} 尚未发现公开录用论文；可能尚未公布，"
-                            "下次抓取会重新检查。"
+            with collector.dblp_access_session(
+                    lambda message: self.root.after(0, self.status.set, message)):
+                for key in selected:
+                    try:
+                        manifest, csv_rows, rich_rows = collector.build_conference_outputs(
+                            output_root,
+                            spec=collector.CONFERENCE_SPECS[key],
+                            year=year,
+                            page_size=1000,
+                            use_iclr_virtual=True,
+                            refresh=refresh,
+                            include_rows=True,
                         )
-                    rows.extend(csv_rows)
-                    jsonl_rows.extend(rich_rows)
-                except RuntimeError as exc:
-                    failures[key] = str(exc)
-                    if conference != "ALL":
-                        raise
+                        manifests[key] = manifest
+                        if manifest.get("collection_status") == "no_public_accepted_papers":
+                            failures[key] = (
+                                f"{key} {year} 尚未发现公开录用论文；可能尚未公布，"
+                                "下次抓取会重新检查。"
+                            )
+                        rows.extend(csv_rows)
+                        jsonl_rows.extend(rich_rows)
+                    except RuntimeError as exc:
+                        failures[key] = str(exc)
+                        if len(selected) == 1:
+                            raise
 
-            if conference == "ALL":
+            if len(selected) > 1:
                 collector.build_combined_outputs(
                     output_root,
                     year=year,
+                    requested_keys=selected,
                     manifests=manifests,
                     csv_rows=rows,
                     jsonl_rows=jsonl_rows,
@@ -792,7 +1060,7 @@ class PaperUI:
             self.status.set(f"抓取完成但有失败：{keys}")
             messagebox.showwarning(
                 "抓取完成",
-                "以下会议抓取失败：\n" + "\n".join(f"{k}: {v}" for k, v in failures.items()),
+                "以下会议/期刊抓取失败：\n" + "\n".join(f"{k}: {v}" for k, v in failures.items()),
             )
         else:
             self.status.set(f"抓取完成：{conference} {year}")
@@ -848,9 +1116,10 @@ class PaperUI:
             return
         self.last_search_result = None
         self.last_search_request = None
-        for item in self.results.get_children():
+        for item in self.result_rows:
             self.results.delete(item)
         self.result_rows.clear()
+        self.result_count.set("显示 0 / 0 篇")
         for view in (self.coverage_view, self.summary_view, self.detail_view):
             self._set_text(view, "")
         self.search_coverage_hint.set("正在读取本地论文和已有摘要…")
@@ -882,6 +1151,7 @@ class PaperUI:
             item_id = self.results.insert("", END)
             self.result_rows[item_id] = row
             self._update_result_item(item_id, row)
+        self._apply_result_view()
         coverage = search.coverage_text(result)
         self._set_text(self.coverage_view, coverage)
         self.search_coverage_hint.set("\n".join(coverage.splitlines()[:2]))

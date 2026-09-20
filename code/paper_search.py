@@ -12,7 +12,7 @@ from . import query_research_topic as topic
 from . import query_target_papers as titles
 
 COVERAGE_FIELDS = ["conference", "year", "status", "paper_count", "abstract_count",
-                   "missing_abstract_count", "match_count", "source_kind", "fetched_at_utc", "warnings"]
+                   "missing_abstract_count", "match_count", "source_kind", "ccf_category", "ccf_type", "collection_scope", "local_pdf_count", "fetched_at_utc", "warnings"]
 
 
 def validate_config(config: dict[str, Any]) -> None:
@@ -52,7 +52,10 @@ def load_local_papers(root: Path, targets: list[dict[str, Any]]) -> tuple[list[d
         manifest_path = directory / "source_manifest.json"
         item = dict(conference=conference, year=year, status="missing", paper_count=0,
                     abstract_count=0, missing_abstract_count=0, match_count=0,
-                    source_kind="", fetched_at_utc="", warnings=[])
+                    source_kind="", fetched_at_utc="", warnings=[],
+                    ccf_category=collector.CONFERENCE_SPECS[conference].ccf_category,
+                    ccf_type=collector.CONFERENCE_SPECS[conference].ccf_type,
+                    collection_scope="", local_pdf_count=0)
         coverage.append(item)
         if not csv_path.is_file() and not manifest_path.is_file():
             continue
@@ -77,6 +80,7 @@ def load_local_papers(root: Path, targets: list[dict[str, Any]]) -> tuple[list[d
             if source_kind == "openreview" and row.get("venueid") != collector.CONFERENCE_SPECS[conference].venue_id(year):
                 raise ValueError(f"{csv_path}: incorrect OpenReview venue ID")
         item.update(status="searched" if rows else "empty", paper_count=len(rows),
+                    collection_scope=manifest.get("collection_scope", source_kind),
                     source_kind=source_kind, fetched_at_utc=manifest.get("fetched_at_utc", ""),
                     warnings=manifest.get("warnings", []))
         if manifest.get("collection_status") == "no_public_accepted_papers":
@@ -85,9 +89,11 @@ def load_local_papers(root: Path, targets: list[dict[str, Any]]) -> tuple[list[d
             item["status"] = "unavailable"
         papers.extend(rows)
     papers = enrichment.load_cached_abstracts(papers, root)
+    papers = enrichment.load_cached_pdfs(papers, root)
     for item in coverage:
         rows = [row for row in papers if row["conference"] == item["conference"] and str(row["year"]) == str(item["year"])]
         item["abstract_count"] = sum(bool(str(row.get("abstract", "")).strip()) for row in rows)
+        item["local_pdf_count"] = sum(bool(row.get("pdf_local_path")) for row in rows)
         item["missing_abstract_count"] = len(rows) - item["abstract_count"]
     return papers, coverage
 
@@ -112,7 +118,9 @@ def search_local(root: Path, targets: list[dict], *, query: str | None = None,
             if hits is not None:
                 row = titles.result_row(paper, query=query, parsed_query=parsed, matches=hits)
                 row.update(matched_fields=["title"], matched_terms=sorted({term for term, _ in hits}),
-                           matched_snippets=[{"field": "title", "text": paper["title"]}])
+                           matched_snippets=[{"field": "title", "term": actual,
+                                              "query_term": term, "text": paper["title"]}
+                                             for term, actual in hits])
                 candidates.append(row)
     for item in coverage:
         item["match_count"] = sum(row.get("conference") == item["conference"] and str(row.get("year")) == str(item["year"]) for row in candidates)
@@ -126,13 +134,13 @@ def coverage_text(result: dict) -> str:
     searched = sum(item["status"] == "searched" for item in coverage)
     missing = sum(item["missing_abstract_count"] for item in coverage)
     labels = {"searched": "已检索", "missing": "未抓取", "empty": "空快照", "unavailable": "未发现公开论文"}
-    lines = [f"已检索 {searched}/{len(coverage)} 个会议年份，{result['searched_paper_count']} 篇论文；"
+    lines = [f"已检索 {searched}/{len(coverage)} 个会议/期刊年份，{result['searched_paper_count']} 篇论文；"
              f"匹配 {len(result['candidates'])} 篇，缺摘要 {missing} 篇。",
              "覆盖范围完整。" if result["complete"] else "覆盖范围不完整：结果仅代表已有数据，请先抓取缺失范围。"]
     for item in coverage:
         lines.append(f"{item['conference']} {item['year']}：{labels[item['status']]}；"
-                     f"论文 {item['paper_count']}，匹配 {item['match_count']}，缺摘要 {item['missing_abstract_count']}；"
-                     f"来源 {item['source_kind'] or '未知'}；采集时间 {item['fetched_at_utc'] or '未知'}")
+                     f"{item['ccf_type']} {item['ccf_category']}；论文 {item['paper_count']}，匹配 {item['match_count']}，缺摘要 {item['missing_abstract_count']}；"
+                     f"本地全文 {item['local_pdf_count']}；来源 {item['source_kind'] or '未知'}；采集时间 {item['fetched_at_utc'] or '未知'}")
         lines.extend(f"  警告：{warning}" for warning in item["warnings"])
     lines.append("本地覆盖不代表远程名单已完整发布；缺摘要可能导致主题检索漏检。")
     return "\n".join(lines)

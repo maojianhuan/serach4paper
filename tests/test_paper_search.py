@@ -168,6 +168,13 @@ class LocalSearchTests(unittest.TestCase):
         snippet = topic.matched_snippet(source, "memory retrieval")
         self.assertIn("memory retrieval", snippet)
 
+    def test_highlight_spans_preserve_unicode_source_offsets(self):
+        source = "Résumé: me\u0301mory retrieval; MEMORY-RETRIEVAL."
+        self.assertTrue(topic.phrase_matches(source, "memory retrieval"))
+        spans = topic.phrase_match_spans(source, "memory retrieval")
+        self.assertEqual([source[start:end] for start, end in spans],
+                         ["me\u0301mory retrieval", "MEMORY-RETRIEVAL"])
+
     def test_empty_and_unpublished_snapshots_are_not_complete_coverage(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

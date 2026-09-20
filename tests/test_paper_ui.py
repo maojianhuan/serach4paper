@@ -188,6 +188,208 @@ class DesktopSearchTests(unittest.TestCase):
         self.assertIn("搜索失败", self.ui.search_coverage_hint.get())
         self.assertIsNone(self.ui.last_search_result)
 
+    def test_sort_filters_and_reading_list_use_only_visible_selection(self):
+        rows = make_snapshot(self.directory)
+        rows[0].update(title="Alpha Assistant", abstract="Available abstract")
+        rows.append({**rows[0], "openreview_id": "second", "source_record_id": "second",
+                     "title": "Beta Assistant", "abstract": ""})
+        make_snapshot(self.directory, rows=rows)
+        pdf = self.directory / "enrichment" / "pdf" / f"{enrichment.paper_key(rows[1])}.pdf"
+        pdf.parent.mkdir(parents=True)
+        pdf.write_bytes(b"%PDF-1.4 test")
+        enrichment.collector.write_jsonl(self.directory / "enrichment" / "pdf_manifest.jsonl",
+            [{"paper_id": enrichment.paper_key(rows[1]), "status": "downloaded", "local_path": str(pdf)}])
+        self.ui.search_text.set("assistant")
+        self.run_search()
+        self.ui.result_sort.set("标题 Z–A")
+        self.ui.sort_box.event_generate("<<ComboboxSelected>>")
+        self.root.update()
+        items = self.ui.results.get_children()
+        self.assertEqual([self.ui.result_rows[item]["title"] for item in items], ["Beta Assistant", "Alpha Assistant"])
+        self.ui.results.selection_set(items)
+        self.ui.only_missing_abstract.set(True)
+        self.ui.only_local_pdf.set(True)
+        self.ui._apply_result_view()
+        visible = self.ui.results.get_children()
+        self.assertEqual(len(visible), 1)
+        self.assertEqual(self.ui.result_rows[visible[0]]["title"], "Beta Assistant")
+        self.assertEqual(len(self.ui.last_search_result["candidates"]), 2)
+        output = self.directory / "reading.md"
+        with patch.object(paper_ui.filedialog, "asksaveasfilename", return_value=str(output)):
+            self.ui.markdown_button.invoke()
+        text = output.read_text()
+        self.assertIn("Beta Assistant", text)
+        self.assertNotIn("Alpha Assistant", text)
+        self.assertIn("未提供摘要", text)
+        self.assertIn(pdf.resolve().as_uri(), text)
+        self.ui.only_missing_abstract.set(False)
+        self.ui.only_local_pdf.set(False)
+        self.ui._apply_result_view()
+        self.assertEqual(len(self.ui.results.get_children()), 2)
+        self.assertEqual(len(self.ui.results.selection()), 1)
+
+    def test_year_sort_and_new_search_remove_detached_items(self):
+        make_snapshot(self.directory, 2024)
+        make_snapshot(self.directory, 2025)
+        self.ui.search_year_start.set("2024")
+        self.ui.search_text.set("assistant")
+        self.run_search()
+        self.assertEqual([self.ui.result_rows[item]["year"] for item in self.ui.results.get_children()], ["2025", "2024"])
+        self.ui.result_sort.set("年份升序")
+        self.ui._apply_result_view()
+        self.assertEqual([self.ui.result_rows[item]["year"] for item in self.ui.results.get_children()], ["2024", "2025"])
+        old_items = list(self.ui.result_rows)
+        self.ui.only_local_pdf.set(True)
+        self.ui._apply_result_view()
+        self.assertEqual(len(self.ui.results.get_children()), 0)
+        self.run_search()
+        self.assertTrue(all(not self.ui.results.exists(item) for item in old_items))
+        self.ui.only_local_pdf.set(False)
+        self.ui._apply_result_view()
+        self.assertEqual(len(self.ui.results.get_children()), 2)
+
+    def test_topic_highlights_real_phrase_variants_and_clears_on_deselection(self):
+        rows = make_snapshot(self.directory)
+        rows[0]["abstract"] = "An agent uses EPISODIC-MEMORIES and episodic memory."
+        make_snapshot(self.directory, rows=rows)
+        self.ui.search_mode.set("主题多字段")
+        self.ui.topic_terms.set("episodic memory")
+        self.run_search()
+        self.ui.results.selection_set(self.ui.results.get_children())
+        self.ui._show_paper_details()
+        ranges = self.ui.detail_view.tag_ranges("match")
+        highlighted = [self.ui.detail_view.get(ranges[i], ranges[i+1]) for i in range(0, len(ranges), 2)]
+        self.assertEqual(highlighted, ["EPISODIC-MEMORIES", "episodic memory"])
+        self.ui.results.selection_remove(self.ui.results.selection())
+        self.ui._show_paper_details()
+        self.assertEqual(self.ui.detail_view.tag_ranges("match"), ())
+        self.assertNotIn(rows[0]["abstract"], self.ui.detail_view.get("1.0", "end"))
+
+    def test_title_highlight_uses_matched_tokens_not_negative_terms(self):
+        rows = make_snapshot(self.directory)
+        rows[0]["title"] = "Time-Series Anomaly Detection"
+        make_snapshot(self.directory, rows=rows)
+        self.ui.search_text.set('"time series" AND anomal* AND NOT forecasting')
+        self.run_search()
+        self.ui.results.selection_set(self.ui.results.get_children())
+        self.ui._show_paper_details()
+        ranges = self.ui.detail_view.tag_ranges("match")
+        highlighted = [self.ui.detail_view.get(ranges[i], ranges[i+1]) for i in range(0, len(ranges), 2)]
+        self.assertEqual(highlighted, ["Time-Series", "Anomaly"])
+
+    def test_open_buttons_dispatch_selected_web_and_existing_pdf(self):
+        rows = make_snapshot(self.directory)
+        rows[0]["source_url"] = "https://example.test/paper"
+        make_snapshot(self.directory, rows=rows)
+        self.ui.search_text.set("assistant")
+        self.run_search()
+        item = next(iter(self.ui.result_rows))
+        self.ui.results.selection_set(item)
+        with patch.object(paper_ui.webbrowser, "open", return_value=True) as browser:
+            self.ui.open_web_button.invoke()
+            browser.assert_called_once_with("https://example.test/paper")
+        pdf = self.directory / "paper with spaces.pdf"
+        pdf.write_bytes(b"%PDF-1.4 test")
+        self.ui.result_rows[item]["pdf_local_path"] = str(pdf)
+        with patch.object(paper_ui.sys, "platform", "linux"), patch.object(paper_ui.subprocess, "run") as launch:
+            self.ui.open_pdf_button.invoke()
+            launch.assert_called_once_with(["xdg-open", str(pdf.resolve())], check=True)
+        pdf.unlink()
+        with patch.object(paper_ui.subprocess, "run") as launch:
+            self.ui.open_pdf_button.invoke()
+            launch.assert_not_called()
+        self.assertIn("未找到本地 PDF", self.errors[-1][1])
+
+    def test_catalogue_picker_applies_journal_selection(self):
+        from tkinter import Toplevel, ttk
+        self.ui._choose_venues('search')
+        dialog = next(child for child in self.root.winfo_children() if isinstance(child, Toplevel))
+        def descendants(widget):
+            for child in widget.winfo_children():
+                yield child
+                yield from descendants(child)
+        widgets = list(descendants(dialog))
+        tree = next(w for w in widgets if isinstance(w, ttk.Treeview))
+        self.assertEqual(len(tree.get_children()), 677)
+        tree.selection_set(('J_TODS', 'J_JATS'))
+        next(w for w in widgets if isinstance(w, ttk.Button) and w.cget('text') == '使用所选目录').invoke()
+        self.assertEqual(self.ui._target_search_conferences(self.ui.search_conference.get()), ['J_JATS', 'J_TODS'])
+        self.assertFalse(self.errors)
+
+    def test_link_pdf_button_updates_report_and_restores_after_search(self):
+        make_snapshot(self.directory)
+        self.ui.search_text.set('assistant')
+        self.run_search()
+        item = next(iter(self.ui.result_rows))
+        self.ui.results.selection_set(item)
+        pdf = self.directory / 'downloaded-by-user.pdf'
+        pdf.write_bytes(b'%PDF-1.7\nexample')
+        with patch.object(paper_ui.filedialog, 'askopenfilename', return_value=str(pdf)):
+            self.ui.link_pdf_button.invoke()
+        self.assertEqual(self.ui.last_search_result['coverage'][0]['local_pdf_count'], 1)
+        self.assertEqual(self.ui.last_search_result['candidates'][0]['pdf_local_path'], str(pdf))
+        self.run_search()
+        self.assertEqual(self.ui.last_search_result['coverage'][0]['local_pdf_count'], 1)
+        self.assertFalse(self.errors)
+
+    def test_oa_button_runs_from_visual_interface(self):
+        make_snapshot(self.directory)
+        self.ui.search_text.set('assistant')
+        self.run_search()
+        item = next(iter(self.ui.result_rows))
+        self.ui.results.selection_set(item)
+        def lookup(row, email):
+            return dict(row, oa_status='found', oa_pdf_url='https://example.test/paper.pdf')
+        with patch.object(paper_ui.simpledialog, 'askstring', return_value='reader@example.test'), \
+             patch.object(enrichment, 'lookup_open_access', side_effect=lookup):
+            self.ui.oa_button.invoke()
+            self.wait_for(lambda: self.ui.status.get().startswith('找到'))
+        self.assertEqual(self.ui.last_search_result['candidates'][0]['oa_status'], 'found')
+        self.assertFalse(self.errors)
+
+    def test_fetch_displays_dblp_verification_progress(self):
+        from tests.test_dblp_access import CHALLENGE, URL, response
+        from unittest.mock import Mock
+        collector = paper_ui.collector
+        opener = Mock()
+        opener.open.side_effect = [response(CHALLENGE), response(b'{"ok":true}')]
+        statuses = []
+        self.ui.status.trace_add('write', lambda *_: statuses.append(self.ui.status.get()))
+        self.ui.fetch_venues = ['J_TODS']
+        self.ui.fetch_conference.set('目录多选')
+        self.ui.fetch_year.set('2025')
+        def collect(*args, **kwargs):
+            collector.request_bytes(URL)
+            return {}, [], []
+        with patch.object(collector, 'build_opener', return_value=opener), \
+             patch.object(collector.time, 'sleep'), \
+             patch.object(collector, 'build_conference_outputs', side_effect=collect), \
+             patch.object(paper_ui.messagebox, 'showinfo'):
+            self.ui.fetch_button.invoke()
+            self.wait_for(lambda: self.ui.fetch_button.instate(['!disabled']))
+        self.assertTrue(any('等待 DBLP 访问验证' in value for value in statuses))
+        self.assertTrue(self.ui.status.get().startswith('抓取完成'))
+        self.assertFalse(self.errors)
+
+    def test_multiselect_fetch_exports_actual_scope_with_failed_source(self):
+        collector = paper_ui.collector
+        self.ui.fetch_venues = ['J_TODS', 'J_JATS']
+        self.ui.fetch_conference.set('目录多选')
+        self.ui.fetch_year.set('2025')
+        def collect(*args, **kwargs):
+            if kwargs['spec'].key == 'J_JATS':
+                raise RuntimeError('source unavailable')
+            return {'counts': {'accepted_paper_count': 0}}, [], []
+        with patch.object(collector, 'build_conference_outputs', side_effect=collect), \
+             patch.object(paper_ui.messagebox, 'showwarning'):
+            self.ui.fetch_button.invoke()
+            self.wait_for(lambda: self.ui.fetch_button.instate(['!disabled']))
+        manifest = json.loads((self.directory / '2025/ALL/source_manifest.json').read_text())
+        self.assertEqual(manifest['conferences_requested'], ['J_TODS', 'J_JATS'])
+        self.assertEqual(manifest['conferences_completed'], ['J_TODS'])
+        self.assertIn('J_JATS', manifest['failures'])
+        self.assertFalse(self.errors)
+
 
 if __name__ == "__main__":
     unittest.main()
