@@ -7,6 +7,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from tkinter import Tk
 from unittest.mock import patch
+from urllib.error import URLError
 
 from code import paper_ui
 from code import paper_search as search
@@ -310,6 +311,89 @@ class DesktopSearchTests(unittest.TestCase):
         self.assertIn("缺少来源 BibTeX", self.errors[0][1])
         self.assertIn("An Autonomous Assistant", self.errors[0][1])
         self.assertEqual(output.read_text(), "Keep existing bibliography")
+
+    def test_bibtex_enrichment_button_exports_immediately_and_restores_after_search(self):
+        rows = make_snapshot(self.directory)
+        rows[0]["doi"] = "10.1234/assistant"
+        make_snapshot(self.directory, rows=rows)
+        snapshot = self.directory / "2025" / "ICLR" / "ICLR_2025_accepted_papers.csv"
+        original = snapshot.read_bytes()
+        self.ui.search_text.set("assistant")
+        self.run_search()
+        self.ui.results.selection_set(self.ui.results.get_children())
+        bibtex = "@article{assistant, title={An Autonomous Assistant}, doi={10.1234/assistant}}"
+        with patch.object(enrichment, "urlopen") as request:
+            response = request.return_value.__enter__.return_value
+            response.read.return_value = bibtex.encode("utf-8")
+            response.geturl.return_value = "https://api.crossref.org/assistant/transform"
+            self.ui.bibtex_enrich_button.invoke()
+            self.assertTrue(self.ui.bibtex_button.instate(["disabled"]))
+            self.wait_for(lambda: self.ui.status.get().startswith("BibTeX 补全完成"))
+        self.assertFalse(self.errors)
+        self.assertFalse(self.ui.search_stale)
+        self.assertTrue(self.ui.report_button.instate(["!disabled"]))
+        self.assertEqual(self.ui.last_search_result["candidates"][0]["bibtex"], bibtex)
+        self.assertIn("DOI 引用服务", self.ui.detail_view.get("1.0", "end"))
+        self.assertIn("https://api.crossref.org/assistant/transform", self.ui.detail_view.get("1.0", "end"))
+        output = self.directory / "selected.bib"
+        with patch.object(paper_ui.filedialog, "asksaveasfilename", return_value=str(output)):
+            self.ui.bibtex_button.invoke()
+        self.assertEqual(output.read_text(encoding="utf-8"), bibtex + "\n")
+        with patch.object(enrichment, "urlopen", side_effect=AssertionError("network forbidden")):
+            self.run_search()
+            self.assertEqual(next(iter(self.ui.result_rows.values()))["bibtex"], bibtex)
+        self.assertEqual(snapshot.read_bytes(), original)
+
+    def test_bibtex_enrichment_shows_per_paper_errors_and_reenables_actions(self):
+        base = make_snapshot(self.directory)[0]
+        rows = [{**base, "title": "Missing DOI Assistant"},
+                {**base, "openreview_id": "network", "source_record_id": "network", "title": "Offline Assistant", "doi": "10.1234/offline"}]
+        make_snapshot(self.directory, rows=rows)
+        self.ui.search_text.set("assistant")
+        self.run_search()
+        self.ui.results.selection_set(self.ui.results.get_children())
+        with patch.object(enrichment, "urlopen", side_effect=URLError("offline")), \
+             patch.object(paper_ui.messagebox, "showwarning") as warning:
+            self.ui.bibtex_enrich_button.invoke()
+            self.wait_for(lambda: self.ui.status.get().startswith("BibTeX 补全完成"))
+        self.assertFalse(self.errors)
+        self.assertIn("失败 2", self.ui.status.get())
+        self.assertTrue(self.ui.bibtex_enrich_button.instate(["!disabled"]))
+        warning.assert_called_once()
+        detail = warning.call_args.args[1]
+        for text in ("Missing DOI Assistant", "缺少 DOI", "Offline Assistant", "offline"):
+            self.assertIn(text, detail)
+        for item, row in self.ui.result_rows.items():
+            self.ui.results.selection_set(item)
+            self.ui._show_paper_details()
+            self.assertIn(row["bibtex_error"], self.ui.detail_view.get("1.0", "end"))
+
+    def test_bibtex_enrichment_storage_failure_is_reported_and_actions_reenabled(self):
+        rows = make_snapshot(self.directory)
+        rows[0]["doi"] = "10.1234/assistant"
+        make_snapshot(self.directory, rows=rows)
+        self.ui.search_text.set("assistant")
+        self.run_search()
+        self.ui.results.selection_set(self.ui.results.get_children())
+        with patch.object(enrichment, "_fetch_doi_bibtex", return_value=("@article{key, title={Paper}}", "https://doi.org/10.1234/assistant")), \
+             patch.object(enrichment, "_write_jsonl_map", side_effect=OSError("Read-only directory")):
+            self.ui.bibtex_enrich_button.invoke()
+            self.wait_for(lambda: bool(self.errors))
+        self.assertEqual(self.errors[0][0], "BibTeX 补全失败")
+        self.assertIn("Read-only directory", self.errors[0][1])
+        self.assertTrue(self.ui.bibtex_enrich_button.instate(["!disabled"]))
+        self.assertFalse(next(iter(self.ui.result_rows.values()))["bibtex"])
+
+    def test_bibtex_enrichment_requires_visible_selection_and_respects_busy_state(self):
+        with patch.object(paper_ui.messagebox, "showwarning") as warning, \
+             patch.object(enrichment, "enrich_bibtex") as enrich:
+            self.ui._set_action_buttons("disabled")
+            self.ui.bibtex_enrich_button.invoke()
+            warning.assert_not_called()
+            self.ui._set_action_buttons("normal")
+            self.ui.bibtex_enrich_button.invoke()
+            warning.assert_called_once()
+            enrich.assert_not_called()
 
     def test_topic_highlights_real_phrase_variants_and_clears_on_deselection(self):
         rows = make_snapshot(self.directory)

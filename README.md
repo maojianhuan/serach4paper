@@ -104,6 +104,7 @@ UI 主要包含抓取和搜索两部分：
 - 批量获取选中论文摘要；
 - 导出适合 AI 阅读的 JSONL；
 - 将当前可见且选中的论文导出为 BibTeX；
+- 按 DOI 补全选中论文缺失的 BibTeX，并记录来源、获取时间和逐篇失败原因；
 - 批量下载公开 PDF；
 - 查看抓取来源、警告和失败信息。
 
@@ -159,10 +160,11 @@ source_manifest.json
 raw/
 ```
 
-摘要和 PDF enrichment 数据位于对应输出目录的 `enrichment/` 下，通常包括：
+摘要、BibTeX 和 PDF 补全数据位于对应输出目录的 `enrichment/` 下，通常包括：
 
 ```text
 enrichment/abstracts.jsonl
+enrichment/bibtex.jsonl
 enrichment/pdf_manifest.jsonl
 enrichment/pdf/
 ```
@@ -258,6 +260,12 @@ PDF 筛选要求文件实际存在；搜索会读取已有下载记录。筛选�
 “导出选中 BibTeX”按当前列表顺序将可见且选中的论文保存为 UTF-8 `.bib` 文件，保留来源提供的 BibTeX 条目。
 若有论文缺少来源 BibTeX，会列出缺失论文并停止导出；条目无法识别或引用键重复时也会报错，已有目标文件不会因此被覆盖。
 可取消选中缺失条目的论文后重试，引用键重复的论文可分别导出。此操作只使用本地已有数据，不联网补全或自动生成引用。
+
+点击“补全选中 BibTeX”可通过 [DOI 内容协商](https://www.crossref.org/documentation/retrieve-metadata/content-negotiation/)获取缺失条目，仅处理当前可见且选中的论文，保留已有 BibTeX。
+返回条目的 DOI 必须与论文 DOI 一致；无 DOI、格式无效、服务失败或返回身份不匹配时，会逐篇显示原因。
+结果及来源链接、获取时间保存在论文目录的 `enrichment/bibtex.jsonl`，不会改写原始会议/期刊快照。
+补全成功后可立即导出；重新搜索会读取已有补全结果，搜索本身不联网。详情页展示引用状态、来源、获取时间和失败原因。
+每篇每次只查询一次，失败后可手动再次点击补全；已成功的条目直接复用。损坏记录或补全记录与当前 DOI 不一致时明确报错。
 
 ### 项目结构
 
@@ -378,6 +386,7 @@ The UI provides:
 - Batch abstract enrichment;
 - AI-friendly JSONL export;
 - BibTeX export of visible selected papers;
+- DOI-based completion of missing BibTeX with provenance and per-paper failures;
 - Public PDF downloads;
 - Source, warning, and failure reporting.
 
@@ -433,10 +442,11 @@ source_manifest.json
 raw/
 ```
 
-Abstract and PDF enrichment data are normally stored under:
+Abstract, BibTeX and PDF enrichment data are normally stored under:
 
 ```text
 enrichment/abstracts.jsonl
+enrichment/bibtex.jsonl
 enrichment/pdf_manifest.jsonl
 enrichment/pdf/
 ```
@@ -539,6 +549,14 @@ Export selected BibTeX writes a UTF-8 `.bib` file in visible selection order, pr
 Missing BibTeX records are listed and stop the export. Unrecognized entries or duplicate citation keys also stop it,
 without overwriting an existing destination. Deselect papers with missing entries to retry, or export papers with
 conflicting keys separately. This uses local data only; it does not fetch or generate citations.
+
+Complete selected BibTeX retrieves missing citations through DOI content negotiation for visible selected papers,
+preserving existing entries. The returned DOI must match the paper's DOI. Missing/invalid DOIs, service errors,
+and identity mismatches are reported per paper. Results, source URLs and retrieval times are saved in
+`enrichment/bibtex.jsonl`, leaving the original venue snapshots unchanged. Export is available immediately;
+later searches restore saved results without network requests. The detail pane shows citation status and provenance.
+Each paper gets one lookup per attempt; failed items can be retried explicitly, while successful results are reused.
+Corrupt records or saved results associated with a different DOI fail explicitly.
 
 ### Repository layout
 

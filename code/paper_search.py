@@ -89,6 +89,7 @@ def load_local_papers(root: Path, targets: list[dict[str, Any]]) -> tuple[list[d
             item["status"] = "unavailable"
         papers.extend(rows)
     papers = enrichment.load_cached_abstracts(papers, root)
+    papers = enrichment.load_cached_bibtex(papers, root)
     papers = enrichment.load_cached_pdfs(papers, root)
     for item in coverage:
         rows = [row for row in papers if row["conference"] == item["conference"] and str(row["year"]) == str(item["year"])]

@@ -2,12 +2,136 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+from urllib.error import HTTPError, URLError
 
 from code import paper_enrichment as enrichment
 
 
 class PaperEnrichmentTests(unittest.TestCase):
+    def test_doi_bibtex_enrichment_checks_identity_and_preserves_source_and_provenance(self):
+        row = dict(conference="TODS", year=2025, source_record_id="paper-one", title="A paper",
+                   doi="HTTPS://doi.org/10.1234/EXAMPLE%23v1", bibtex="")
+        bibtex = '@article{Example, title={{A} paper}, DOI={10.1234/Example#v1}, year={2025}}'
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch.object(enrichment, "urlopen") as request, \
+                 patch.object(enrichment, "utc_now", return_value="2026-09-20T12:00:00+00:00"):
+                response = request.return_value.__enter__.return_value
+                response.read.return_value = bibtex.encode("utf-8")
+                response.geturl.return_value = "https://api.crossref.org/example/transform"
+                rows, failures = enrichment.enrich_bibtex([row], root)
+            request.assert_called_once()
+            sent = request.call_args.args[0]
+            self.assertEqual(sent.full_url, "https://doi.org/10.1234/example%23v1")
+            self.assertEqual(sent.get_header("Accept"), "application/x-bibtex")
+            self.assertEqual(failures, {})
+            self.assertEqual(row["bibtex"], "")
+            self.assertEqual(rows[0]["doi"], row["doi"])
+            self.assertEqual(rows[0]["bibtex"], bibtex)
+            self.assertEqual(rows[0]["bibtex_source"], "doi_content_negotiation")
+            self.assertEqual(rows[0]["bibtex_source_url"], "https://api.crossref.org/example/transform")
+            self.assertEqual(rows[0]["bibtex_retrieved_at"], "2026-09-20T12:00:00+00:00")
+            path = root / "enrichment" / "bibtex.jsonl"
+            before = path.read_bytes()
+            record = json.loads(before)
+            self.assertEqual(record["doi"], "10.1234/example#v1")
+            self.assertEqual(record["status"], "success")
+            with patch.object(enrichment, "urlopen", side_effect=AssertionError("network forbidden")):
+                self.assertEqual(enrichment.load_cached_bibtex([row], root), rows)
+                reused, errors = enrichment.enrich_bibtex([row], root)
+                self.assertEqual((reused, errors), (rows, {}))
+                authoritative = dict(row, bibtex="@article{source, title={Original citation}}")
+                self.assertEqual(enrichment.load_cached_bibtex([authoritative], root), [authoritative])
+                self.assertEqual(enrichment.enrich_bibtex([authoritative], root), ([authoritative], {}))
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_doi_bibtex_enrichment_reports_each_failure_and_keeps_successes(self):
+        rows = [dict(conference="TODS", year=2025, source_record_id=name, title=name, doi=doi)
+                for name, doi in (("Existing", ""), ("Missing DOI", ""), ("Invalid DOI", "not-a-doi"),
+                                  ("Wrong identity", "10.1234/wrong"), ("Network failure", "10.1234/network"),
+                                  ("Matched paper", "10.1234/matched"))]
+        rows[0]["bibtex"] = "@article{original, title={Original}}"
+        wrong, matched = MagicMock(), MagicMock()
+        wrong.__enter__.return_value.read.return_value = b"@article{wrong, title={Wrong paper}, doi={10.1234/other}}"
+        matched.__enter__.return_value.read.return_value = b"@article{matched, title={Matched paper}, doi={10.1234/matched}}"
+        matched.__enter__.return_value.geturl.return_value = "https://api.crossref.org/matched/transform"
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(enrichment, "urlopen", side_effect=[wrong, URLError("offline"), matched]) as request:
+            result, failures = enrichment.enrich_bibtex(rows, Path(directory))
+            self.assertEqual(request.call_count, 3)
+            self.assertEqual(len(failures), 4)
+            self.assertEqual(result[0], rows[0])
+            self.assertEqual([row["bibtex_status"] for row in result[1:]],
+                             ["no_doi", "invalid_doi", "failed", "failed", "success"])
+            for row, message in zip(result[1:5], ("缺少 DOI", "DOI 格式无效", "DOI 不匹配", "offline")):
+                self.assertIn(message, row["bibtex_error"])
+                self.assertEqual(row["bibtex"], "")
+                self.assertIn(enrichment.paper_key(row), failures)
+            restored = enrichment.load_cached_bibtex(rows, Path(directory))
+            self.assertEqual(restored, result)
+
+    def test_doi_bibtex_rejects_unverified_responses_without_retry(self):
+        bodies = [b"<html>Access denied</html>",
+                  b"@article{key, title={Missing DOI}}",
+                  b"@article{key, title={Wrong DOI}, doi={10.1234/other}}",
+                  b"@article{a, title={A}, doi={10.1234/test}} @article{b, title={B}, doi={10.1234/test}}",
+                  b"\xff"]
+        for body in bodies:
+            with self.subTest(body=body), patch.object(enrichment, "urlopen") as request:
+                request.return_value.__enter__.return_value.read.return_value = body
+                with self.assertRaises(ValueError):
+                    enrichment._fetch_doi_bibtex("10.1234/test")
+                request.assert_called_once()
+        error = HTTPError("https://doi.org/10.1234/test", 404, "Not Found", {}, None)
+        with patch.object(enrichment, "urlopen", side_effect=error) as request:
+            with self.assertRaisesRegex(RuntimeError, "HTTP 404"):
+                enrichment._fetch_doi_bibtex("10.1234/test")
+            request.assert_called_once()
+
+    def test_doi_bibtex_existing_citation_needs_no_doi_request_or_cache_write(self):
+        row = dict(title="Original", bibtex="@article{source, title={Original}}")
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(enrichment, "urlopen", side_effect=AssertionError("network forbidden")):
+            self.assertEqual(enrichment.enrich_bibtex([row], Path(directory)), ([row], {}))
+            self.assertEqual(list(Path(directory).iterdir()), [])
+
+    def test_doi_bibtex_failed_lookup_is_retried_only_by_explicit_enrichment(self):
+        row = dict(source_record_id="one", doi="doi:10.1234/test", title="A paper")
+        bibtex = "@article{key, title={A paper}, doi={10.1234/test}}"
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(enrichment, "_fetch_doi_bibtex", side_effect=[RuntimeError("offline"),
+                                                                      (bibtex, "https://doi.org/10.1234/test")]) as fetch:
+            root = Path(directory)
+            failed, failures = enrichment.enrich_bibtex([row], root)
+            self.assertEqual(len(failures), 1)
+            restored = enrichment.load_cached_bibtex([row], root)
+            self.assertEqual(restored, failed)
+            fetch.assert_called_once_with("10.1234/test")
+            retried, failures = enrichment.enrich_bibtex(restored, root)
+            self.assertEqual(fetch.call_count, 2)
+            self.assertEqual(failures, {})
+            self.assertEqual(retried[0]["bibtex"], bibtex)
+            self.assertEqual(retried[0]["bibtex_error"], "")
+            self.assertEqual(enrichment.load_cached_bibtex([row], root), retried)
+
+    def test_doi_bibtex_corrupt_or_mismatched_saved_record_fails_explicitly(self):
+        row = dict(source_record_id="one", title="A paper", doi="10.1234/current")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "enrichment" / "bibtex.jsonl"
+            path.parent.mkdir()
+            path.write_text("{broken", encoding="utf-8")
+            for action in (enrichment.load_cached_bibtex, enrichment.enrich_bibtex):
+                with self.subTest(action=action.__name__), self.assertRaisesRegex(ValueError, "Cannot read enrichment cache"):
+                    action([row], root)
+            for record, message in ((dict(doi="10.1234/old", bibtex="@article{key, title={Old}}"), "DOI 不匹配"),
+                                    (dict(doi="10.1234/current", bibtex=""), "缺少引用内容")):
+                enrichment.collector.write_jsonl(path, [dict(record, paper_id=enrichment.paper_key(row), status="success")])
+                for action in (enrichment.load_cached_bibtex, enrichment.enrich_bibtex):
+                    with self.subTest(record=record, action=action.__name__), self.assertRaisesRegex(ValueError, message):
+                        action([row], root)
+
     def test_bibtex_preserves_source_text_and_selection_order(self):
         first = '@inproceedings{z2025,\n  title = {{LLM} 与记忆},\n  author = {M{\\\"u}ller and 王明},\n  year = {2025}\n}'
         second = '@article{a2024, title={Second paper}, journal={Research \\& Science}, year={2024}}'

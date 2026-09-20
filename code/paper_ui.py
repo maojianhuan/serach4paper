@@ -368,10 +368,12 @@ class PaperUI:
         actions.grid(row=4, column=0, columnspan=3, sticky="w", pady=5)
         self.search_button = ttk.Button(actions, text="搜索", command=self._search)
         self.abstract_button = ttk.Button(actions, text="获取选中摘要", command=self._start_abstract_enrichment)
+        self.bibtex_enrich_button = ttk.Button(actions, text="补全选中 BibTeX", command=self._start_bibtex_enrichment)
         self.export_button = ttk.Button(actions, text="导出选中 AI JSONL", command=self._export_ai_jsonl)
         self.pdf_button = ttk.Button(actions, text="下载选中 PDF", command=self._start_pdf_download)
         self.report_button = ttk.Button(actions, text="导出本次结果与统计", command=self._export_search_report, state="disabled")
-        for button in (self.search_button, self.abstract_button, self.export_button, self.pdf_button, self.report_button):
+        for button in (self.search_button, self.abstract_button, self.bibtex_enrich_button,
+                       self.export_button, self.pdf_button, self.report_button):
             button.pack(side=LEFT, padx=(0, 8))
         self.search_coverage_hint = StringVar(value="已有摘要补全数据会自动参与搜索；主题词采用词前缀匹配，候选仍需人工审核。")
         ttk.Label(parent, textvariable=self.search_coverage_hint, wraplength=1000).pack(fill="x", pady=5)
@@ -598,11 +600,20 @@ class PaperUI:
         evidence = "\n".join(f"{hit.get('query_group', '')} | {hit.get('field', '')} | {hit.get('term', '')}\n{hit.get('text', '')}" for hit in row.get("matched_snippets", []))
         if self.search_stale:
             evidence = "摘要已更新，请重新搜索后查看最新命中依据和高亮。"
+        bibtex_status = ("已有" if row.get("bibtex") else
+                         {"no_doi": "缺少 DOI", "invalid_doi": "DOI 格式无效", "failed": "补全失败"}
+                         .get(row.get("bibtex_status"), "未提供"))
+        bibtex_source = ("DOI 引用服务" if row.get("bibtex_source") == "doi_content_negotiation"
+                         else "原始快照" if row.get("bibtex") else "未提供")
         self._set_text(self.detail_view, prefix + abstract + "\n\n命中依据：\n" + evidence + "\n\n全文状态："
                        + str(row.get("oa_status", "未查询")) + "；版本：" + str(row.get("oa_version", "未知"))
                        + "\n开放版本：" + str(row.get("oa_landing_url") or row.get("oa_pdf_url") or "未发现/未查询")
                        + "\n本地 PDF：" + str(row.get("pdf_local_path") or "未关联")
-                       + "\n未发现开放版或下载失败不代表一定需要订阅；可打开论文网页，通过机构账号访问。")
+                       + "\n未发现开放版或下载失败不代表一定需要订阅；可打开论文网页，通过机构账号访问。"
+                       + f"\n\nBibTeX：{bibtex_status}；来源：{bibtex_source}"
+                       + "\n引用来源链接：" + str(row.get("bibtex_source_url") or "未记录")
+                       + "\n引用获取时间：" + str(row.get("bibtex_retrieved_at") or "未记录")
+                       + "\n补全提示：" + str(row.get("bibtex_error") or "无"))
         if self.search_stale:
             return
         exact = (self.last_search_request or {}).get("config") is None
@@ -799,11 +810,38 @@ class PaperUI:
 
     def _set_action_buttons(self, state: str) -> None:
         for button in (self.abstract_button, self.export_button, self.pdf_button, self.search_button, self.report_button,
-                       self.open_web_button, self.open_pdf_button, self.markdown_button, self.bibtex_button,
+                       self.open_web_button, self.open_pdf_button, self.markdown_button, self.bibtex_button, self.bibtex_enrich_button,
                        self.oa_button, self.link_pdf_button):
             button.config(state=state)
         if self.search_stale or self.last_search_result is None:
             self.report_button.config(state="disabled")
+
+    def _start_bibtex_enrichment(self) -> None:
+        selected = self._selected_result_rows()
+        if not selected:
+            messagebox.showwarning("BibTeX", "请先在搜索结果中选择论文")
+            return
+        output_root = Path(self.output_root.get().strip()).expanduser().resolve()
+        self._set_action_buttons("disabled")
+        self.status.set(f"正在补全 {len(selected)} 篇选中论文的 BibTeX…")
+        def worker():
+            try:
+                rows, failures = enrichment.enrich_bibtex((row for _, row in selected), output_root)
+                self.root.after(0, self._bibtex_done, selected, rows, failures)
+            except Exception as exc:
+                self.root.after(0, self._action_error, "BibTeX 补全失败", str(exc))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _bibtex_done(self, selected, rows, failures) -> None:
+        for (item, _), row in zip(selected, rows):
+            self.result_rows[item].update(row)
+        self._set_action_buttons("normal")
+        self._show_paper_details()
+        self.status.set(f"BibTeX 补全完成：已有或补全 {len(rows) - len(failures)}，失败 {len(failures)}")
+        if failures:
+            details = [f"{row.get('title') or enrichment.paper_key(row)}：{failures[enrichment.paper_key(row)]}"
+                       for row in rows if enrichment.paper_key(row) in failures]
+            messagebox.showwarning("BibTeX 补全完成", "以下论文未能补全：\n" + "\n".join(details))
 
     def _start_abstract_enrichment(self) -> None:
         selected = self._selected_result_rows()

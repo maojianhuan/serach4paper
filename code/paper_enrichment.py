@@ -1,4 +1,4 @@
-"""Enrich selected paper rows with abstracts and public PDF downloads.
+"""Enrich selected paper rows with abstracts, DOI citations and public PDFs.
 
 The collector remains responsible for conference membership and normalized
 metadata.  This module operates on selected rows from the local CSV snapshots,
@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, unquote, urlencode
 from urllib.request import Request, urlopen
 
 from . import fetch_openreview_accepted as collector
@@ -185,6 +185,104 @@ def export_bibtex(rows: Iterable[dict[str, Any]], output_path: Path) -> Path:
         raise ValueError("请先选择论文；未写入文件。")
     output_path.write_text("\n\n".join(records) + "\n", encoding="utf-8")
     return output_path
+
+
+def _normalize_doi(value: Any) -> str:
+    doi = _as_text(value)
+    if re.match(r"^https?://(?:dx\.)?doi\.org/", doi, flags=re.I):
+        doi = unquote(re.sub(r"^https?://(?:dx\.)?doi\.org/", "", doi, flags=re.I))
+    return re.sub(r"^doi:\s*", "", doi, flags=re.I).strip().casefold()
+
+
+def _fetch_doi_bibtex(doi: str) -> tuple[str, str]:
+    url = "https://doi.org/" + quote(doi, safe="/")
+    request = Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/x-bibtex"})
+    try:
+        with urlopen(request, timeout=30) as response:
+            bibtex = response.read().decode("utf-8").strip()
+            source_url = response.geturl()
+    except HTTPError as exc:
+        raise RuntimeError(f"DOI BibTeX 查询失败：HTTP {exc.code}") from exc
+    except (URLError, OSError) as exc:
+        raise RuntimeError(f"DOI BibTeX 查询失败：{exc}") from exc
+    entries = collector.parse_bibtex_entries(bibtex.encode("utf-8"))
+    if (len(entries) != 1 or entries[0]["_raw_bibtex"] != bibtex
+            or not entries[0]["_citation_key"] or not entries[0].get("title")):
+        raise ValueError("DOI 服务未返回可识别的单条 BibTeX")
+    returned_doi = _normalize_doi(entries[0].get("doi"))
+    if not returned_doi:
+        raise ValueError("返回的 BibTeX 缺少 DOI，无法确认论文身份")
+    if returned_doi != doi:
+        raise ValueError(f"返回的 BibTeX DOI 不匹配：请求 {doi}，返回 {returned_doi}")
+    return bibtex, source_url
+
+
+def _apply_bibtex_record(row: dict[str, Any], record: dict[str, Any]) -> dict[str, Any]:
+    if record.get("doi") != _normalize_doi(row.get("doi")):
+        raise ValueError(f"BibTeX 补全记录与当前论文 DOI 不匹配：{paper_key(row)}")
+    if record.get("status") == "success" and not _as_text(record.get("bibtex")):
+        raise ValueError(f"BibTeX 成功记录缺少引用内容：{paper_key(row)}")
+    updated = dict(row, bibtex=record.get("bibtex", ""))
+    for field in ("status", "source", "source_url", "retrieved_at", "error"):
+        updated[f"bibtex_{field}"] = record.get(field, "")
+    return updated
+
+
+def load_cached_bibtex(rows: Iterable[dict[str, Any]], output_root: Path) -> list[dict[str, Any]]:
+    """Restore DOI enrichment without replacing source-provided bibliography."""
+    cache = _read_jsonl_map(_enrichment_root(output_root) / "bibtex.jsonl", strict=True)
+    result = []
+    for source in rows:
+        row = dict(source)
+        cached = cache.get(paper_key(row))
+        if not _as_text(row.get("bibtex")) and cached:
+            row = _apply_bibtex_record(row, cached)
+        result.append(row)
+    return result
+
+
+def enrich_bibtex(
+    rows: Iterable[dict[str, Any]], output_root: Path,
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """Fetch missing citations by DOI and retain per-paper results and provenance."""
+    cache_path = _enrichment_root(output_root) / "bibtex.jsonl"
+    cache = _read_jsonl_map(cache_path, strict=True)
+    enriched_rows = []
+    failures = {}
+    changed = False
+    for source in rows:
+        row = dict(source)
+        if _as_text(row.get("bibtex")):
+            enriched_rows.append(row)
+            continue
+        key = paper_key(row)
+        doi = _normalize_doi(row.get("doi"))
+        cached = cache.get(key)
+        if cached and cached.get("status") == "success":
+            record = cached
+        else:
+            record = dict(paper_id=key, title=_as_text(row.get("title")), doi=doi,
+                          status="failed", bibtex="", source="", source_url="", retrieved_at="", error="")
+            if not doi:
+                record.update(status="no_doi", error="缺少 DOI，无法补全 BibTeX")
+            elif not re.fullmatch(r"10\.\d+(?:\.\d+)*/\S+", doi):
+                record.update(status="invalid_doi", error=f"DOI 格式无效：{doi}")
+            else:
+                record.update(source="doi_content_negotiation", source_url="https://doi.org/" + quote(doi, safe="/"))
+                try:
+                    bibtex, source_url = _fetch_doi_bibtex(doi)
+                    record.update(status="success", bibtex=bibtex, source_url=source_url, retrieved_at=utc_now())
+                except (RuntimeError, ValueError) as exc:
+                    record["error"] = str(exc)
+            cache[key] = record
+            changed = True
+        row = _apply_bibtex_record(row, record)
+        if record["status"] != "success":
+            failures[key] = record["error"]
+        enriched_rows.append(row)
+    if changed:
+        _write_jsonl_map(cache_path, cache)
+    return enriched_rows, failures
 
 
 def _abstract_from_openreview(payload: Any) -> str:

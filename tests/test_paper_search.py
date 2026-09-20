@@ -36,6 +36,26 @@ def topic_config(years=(2025,)):
 
 
 class LocalSearchTests(unittest.TestCase):
+    def test_saved_doi_bibtex_is_restored_in_both_search_modes_without_network_or_snapshot_writes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rows = make_snapshot(root)
+            rows[0]["doi"] = "10.1234/assistant"
+            make_snapshot(root, rows=rows)
+            bibtex = "@article{assistant, title={An Autonomous Assistant}, doi={10.1234/assistant}}"
+            with patch.object(enrichment, "_fetch_doi_bibtex", return_value=(bibtex, "https://doi.org/10.1234/assistant")):
+                enrichment.enrich_bibtex(rows, root)
+            before = {str(path): path.read_bytes() for path in root.rglob('*') if path.is_file()}
+            config = topic_config()
+            config["query_groups"] = {"assistants": dict(direct=True, terms=["assistant"])}
+            with patch.object(enrichment, "urlopen", side_effect=AssertionError("network forbidden")):
+                for options in (dict(query="assistant"), dict(config=config)):
+                    result = search.search_local(root, config["targets"], **options)
+                    self.assertEqual(result["candidates"][0]["bibtex"], bibtex)
+                    self.assertEqual(result["candidates"][0]["bibtex_source"], "doi_content_negotiation")
+                    self.assertEqual(result["coverage"][0]["match_count"], 1)
+            self.assertEqual({str(path): path.read_bytes() for path in root.rglob('*') if path.is_file()}, before)
+
     def test_cached_abstract_recalls_previously_unmatched_paper_without_network_or_writes(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
