@@ -69,7 +69,7 @@ def _enrichment_root(output_root: Path) -> Path:
     return output_root / "enrichment"
 
 
-def _read_jsonl_map(path: Path) -> dict[str, dict[str, Any]]:
+def _read_jsonl_map(path: Path, *, strict: bool = False) -> dict[str, dict[str, Any]]:
     if not path.is_file():
         return {}
     result: dict[str, dict[str, Any]] = {}
@@ -81,8 +81,30 @@ def _read_jsonl_map(path: Path) -> dict[str, dict[str, Any]]:
                 value = json.loads(line)
                 if isinstance(value, dict) and value.get("paper_id"):
                     result[str(value["paper_id"])] = value
-    except (OSError, json.JSONDecodeError):
+                elif strict:
+                    raise ValueError(f"Invalid enrichment record in {path}: missing paper_id")
+    except (OSError, json.JSONDecodeError) as exc:
+        if strict:
+            raise ValueError(f"Cannot read enrichment cache {path}: {exc}") from exc
         return {}
+    return result
+
+
+def load_cached_abstracts(
+    rows: Iterable[dict[str, Any]], output_root: Path
+) -> list[dict[str, Any]]:
+    """Fill missing abstracts from existing cache only; never fetch or write."""
+    cache = _read_jsonl_map(_enrichment_root(output_root) / "abstracts.jsonl", strict=True)
+    result = []
+    for source in rows:
+        row = dict(source)
+        cached = cache.get(paper_key(row), {})
+        if not _as_text(row.get("abstract")) and cached.get("status") == "success" and _as_text(cached.get("abstract")):
+            row["abstract"] = cached["abstract"]
+            row["abstract_status"] = "success"
+            for name in ("source", "source_url", "retrieved_at", "match_confidence", "matched_title"):
+                row[f"abstract_{name}"] = cached.get(name, "")
+        result.append(row)
     return result
 
 
@@ -450,7 +472,11 @@ def export_ai_jsonl(
                     "pdf_path": row.get("pdf_local_path", ""),
                     "pdf_sha256": row.get("pdf_sha256", ""),
                 },
-                "search": {"query": query},
+                "search": {"query": query,
+                           "matched_query_groups": row.get("matched_query_groups", []),
+                           "matched_terms": row.get("matched_terms", []),
+                           "matched_fields": row.get("matched_fields", []),
+                           "matched_snippets": row.get("matched_snippets", [])},
                 "provenance": {
                     "source_type": row.get("source_type", ""),
                     "source_id": row.get("source_id", ""),

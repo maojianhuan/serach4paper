@@ -275,7 +275,8 @@ def evaluate_query_tree(
     if kind == "phrase":
         phrase_tokens = tokenize(str(node[1]))
         phrase = " ".join(phrase_tokens)
-        if phrase and phrase in normalized_title:
+        if phrase_tokens and any(title_tokens[index:index + len(phrase_tokens)] == phrase_tokens
+                                 for index in range(len(title_tokens) - len(phrase_tokens) + 1)):
             return [(str(node[1]), phrase)]
         return None
     if kind == "not":

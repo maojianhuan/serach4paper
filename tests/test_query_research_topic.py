@@ -4,7 +4,7 @@ import json
 import shlex
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -21,6 +21,19 @@ CONFIG = {
         "tools": {"terms": ["tool creation"]},
     },
 }
+
+
+class ArgumentTests(unittest.TestCase):
+    def test_config_and_output_directory_are_required(self):
+        for argv, missing in (([], "--config"),
+                              (["--output-dir", "results"], "--config"),
+                              (["--config", "query.json"], "--output-dir")):
+            with self.subTest(argv=argv):
+                stderr = io.StringIO()
+                with redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
+                    topic.main(argv)
+                self.assertEqual(raised.exception.code, 2)
+                self.assertIn(missing, stderr.getvalue())
 
 
 class MatchingTests(unittest.TestCase):

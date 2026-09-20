@@ -3,21 +3,25 @@
 
 This tool provides two pages:
 - Fetch page: run conference/year/output-dir fetch jobs.
-- Search page: query local CSVs by title in a year range.
+- Search page: Boolean title and multi-field topic search with coverage reports.
 """
 
 from __future__ import annotations
 
 import csv
+import json
 import os
 import sys
 import threading
 from pathlib import Path
 from tkinter import BOTH, END, LEFT, BooleanVar, StringVar, Tk, filedialog, messagebox
 from tkinter import ttk
+from tkinter.scrolledtext import ScrolledText
 
 from . import fetch_openreview_accepted as collector
 from . import paper_enrichment as enrichment
+from . import paper_search as search
+from . import query_research_topic as topic
 
 
 def _env(key: str, default: str) -> str:
@@ -63,6 +67,16 @@ class PaperUI:
         self.search_year_start = StringVar(value="")
         self.search_year_end = StringVar(value="")
         self.search_text = StringVar()
+        self.search_mode = StringVar(value="标题布尔查询")
+        self.topic_terms = StringVar()
+        self.topic_context = StringVar()
+        self.topic_fields = {field: BooleanVar(value=True) for field in topic.SEARCH_FIELDS}
+        self.topic_config = None
+        self.topic_config_hint = StringVar(value="手动主题：词组用分号分隔；上下文词可留空。")
+        self.last_search_result = None
+        self.last_search_request = None
+        self.search_stale = False
+        self.search_busy = False
         self.status = StringVar(value="Ready")
         self.result_rows: dict[str, dict[str, object]] = {}
         self.search_query = ""
@@ -285,121 +299,178 @@ class PaperUI:
         status_panel.rowconfigure(1, weight=1)
 
     def _build_search_page(self, parent: ttk.Frame) -> None:
-        panel = ttk.LabelFrame(parent, text="搜索条件", style="Card.TLabelframe", padding=14)
+        panel = ttk.LabelFrame(parent, text="搜索条件（只读取本地数据）", padding=8)
         panel.pack(fill="x")
-
         panel.columnconfigure(1, weight=1)
-        panel.rowconfigure(6, weight=1)
-
-        ttk.Label(panel, text="会议", style="Section.TLabel").grid(row=0, column=0, sticky="w", pady=6)
-        ttk.Combobox(
-            panel,
-            textvariable=self.search_conference,
-            values=CONFERENCES,
-            state="readonly",
-            width=24,
-        ).grid(row=0, column=1, sticky="w", pady=6)
-
-        ttk.Label(panel, text="起始年份（可空）", style="Section.TLabel").grid(row=1, column=0, sticky="w", pady=6)
-        ttk.Combobox(
-            panel,
-            textvariable=self.search_year_start,
-            values=YEAR_CHOICES,
-            width=24,
-        ).grid(row=1, column=1, sticky="w", pady=6)
-
-        ttk.Label(panel, text="结束年份（可空）", style="Section.TLabel").grid(row=2, column=0, sticky="w", pady=6)
-        ttk.Combobox(
-            panel,
-            textvariable=self.search_year_end,
-            values=YEAR_CHOICES,
-            width=24,
-        ).grid(row=2, column=1, sticky="w", pady=6)
-
-        ttk.Label(panel, text="标题关键词", style="Section.TLabel").grid(row=3, column=0, sticky="w", pady=6)
-        entry = ttk.Entry(panel, textvariable=self.search_text)
-        entry.grid(row=3, column=1, sticky="ew", pady=6)
+        ttk.Label(panel, text="论文目录").grid(row=0, column=0, sticky="w")
+        ttk.Entry(panel, textvariable=self.output_root).grid(row=0, column=1, sticky="ew")
+        ttk.Button(panel, text="浏览", command=self._browse_output).grid(row=0, column=2)
+        filters = ttk.Frame(panel)
+        filters.grid(row=1, column=0, columnspan=3, sticky="w", pady=5)
+        for label, variable, choices in (("会议", self.search_conference, CONFERENCES),
+                                        ("起始年", self.search_year_start, YEAR_CHOICES),
+                                        ("结束年", self.search_year_end, YEAR_CHOICES),
+                                        ("模式", self.search_mode, ("标题布尔查询", "主题多字段"))):
+            ttk.Label(filters, text=label).pack(side=LEFT, padx=(0, 4))
+            box = ttk.Combobox(filters, textvariable=variable, values=choices, width=14,
+                               state="readonly" if label in ("会议", "模式") else "normal")
+            box.pack(side=LEFT, padx=(0, 10))
+            if label == "模式":
+                box.bind("<<ComboboxSelected>>", lambda _event: self._search_mode_changed())
+        self.title_controls = ttk.Frame(panel)
+        self.title_controls.grid(row=2, column=0, columnspan=3, sticky="ew")
+        self.title_controls.columnconfigure(1, weight=1)
+        ttk.Label(self.title_controls, text="标题表达式").grid(row=0, column=0)
+        entry = ttk.Entry(self.title_controls, textvariable=self.search_text)
+        entry.grid(row=0, column=1, sticky="ew", padx=8)
         entry.bind("<Return>", lambda _event: self._search())
-
-        self.search_button = ttk.Button(
-            panel,
-            text="搜索",
-            style="Accent.TButton",
-            command=self._search,
-        )
-        self.search_button.grid(row=3, column=2, padx=(10, 0), pady=6)
-
-        action_bar = ttk.Frame(panel)
-        action_bar.grid(row=4, column=0, columnspan=3, sticky="w", pady=(8, 0))
-        self.abstract_button = ttk.Button(
-            action_bar,
-            text="获取选中摘要",
-            command=self._start_abstract_enrichment,
-        )
-        self.abstract_button.pack(side=LEFT, padx=(0, 8))
-        self.export_button = ttk.Button(
-            action_bar,
-            text="导出 AI JSONL",
-            command=self._export_ai_jsonl,
-        )
-        self.export_button.pack(side=LEFT, padx=(0, 8))
-        self.pdf_button = ttk.Button(
-            action_bar,
-            text="下载选中 PDF",
-            command=self._start_pdf_download,
-        )
-        self.pdf_button.pack(side=LEFT)
-
-        self.result_panel = ttk.LabelFrame(
-            parent,
-            text="搜索结果",
-            style="Card.TLabelframe",
-            padding=(10, 8, 10, 10),
-        )
-        self.result_panel.pack(fill=BOTH, expand=True, pady=(12, 0))
-
-        columns = (
-            "conference",
-            "year",
-            "title",
-            "authors",
-            "abstract_status",
-            "pdf_status",
-            "source_url",
-        )
-        self.results = ttk.Treeview(
-            self.result_panel,
-            columns=columns,
-            show="headings",
-            selectmode="extended",
-        )
-        for col, title, width in (
-            ("conference", "会议", 80),
-            ("year", "年份", 70),
-            ("title", "标题", 410),
-            ("authors", "作者", 240),
-            ("abstract_status", "摘要", 90),
-            ("pdf_status", "PDF", 90),
-            ("source_url", "来源", 240),
-        ):
+        ttk.Label(self.title_controls, text='支持 AND / OR / NOT、括号、"精确短语"、通配符 *；空格表示 AND。').grid(row=1, column=1, sticky="w")
+        self.topic_controls = ttk.Frame(panel)
+        self.topic_controls.grid(row=3, column=0, columnspan=3, sticky="ew")
+        self.topic_controls.columnconfigure(1, weight=1)
+        ttk.Label(self.topic_controls, text="主题词组").grid(row=0, column=0)
+        self.topic_terms_entry = ttk.Entry(self.topic_controls, textvariable=self.topic_terms)
+        self.topic_terms_entry.grid(row=0, column=1, sticky="ew", padx=8)
+        ttk.Label(self.topic_controls, text="上下文词").grid(row=1, column=0)
+        self.topic_context_entry = ttk.Entry(self.topic_controls, textvariable=self.topic_context)
+        self.topic_context_entry.grid(row=1, column=1, sticky="ew", padx=8)
+        field_bar = ttk.Frame(self.topic_controls)
+        field_bar.grid(row=2, column=0, columnspan=2, sticky="w")
+        self.field_buttons = []
+        for field, label in (("title", "标题"), ("abstract", "摘要"), ("keywords", "关键词"), ("tldr", "TLDR")):
+            button = ttk.Checkbutton(field_bar, text=label, variable=self.topic_fields[field])
+            button.pack(side=LEFT)
+            self.field_buttons.append(button)
+        ttk.Button(field_bar, text="加载主题配置", command=self._load_topic_config).pack(side=LEFT, padx=8)
+        ttk.Button(field_bar, text="使用手动条件", command=self._clear_topic_config).pack(side=LEFT)
+        ttk.Button(field_bar, text="保存主题配置", command=self._save_topic_config).pack(side=LEFT, padx=8)
+        ttk.Label(self.topic_controls, textvariable=self.topic_config_hint, wraplength=950).grid(row=3, column=0, columnspan=2, sticky="w")
+        actions = ttk.Frame(panel)
+        actions.grid(row=4, column=0, columnspan=3, sticky="w", pady=5)
+        self.search_button = ttk.Button(actions, text="搜索", command=self._search)
+        self.abstract_button = ttk.Button(actions, text="获取选中摘要", command=self._start_abstract_enrichment)
+        self.export_button = ttk.Button(actions, text="导出选中 AI JSONL", command=self._export_ai_jsonl)
+        self.pdf_button = ttk.Button(actions, text="下载选中 PDF", command=self._start_pdf_download)
+        self.report_button = ttk.Button(actions, text="导出本次结果与统计", command=self._export_search_report, state="disabled")
+        for button in (self.search_button, self.abstract_button, self.export_button, self.pdf_button, self.report_button):
+            button.pack(side=LEFT, padx=(0, 8))
+        self.search_coverage_hint = StringVar(value="已有摘要补全数据会自动参与搜索；主题词采用词前缀匹配，候选仍需人工审核。")
+        ttk.Label(parent, textvariable=self.search_coverage_hint, wraplength=1000).pack(fill="x", pady=5)
+        notebook = ttk.Notebook(parent)
+        notebook.pack(fill=BOTH, expand=True)
+        self.result_panel = ttk.Frame(notebook)
+        notebook.add(self.result_panel, text="论文结果")
+        columns = ("conference", "year", "title", "authors", "abstract_status", "pdf_status", "source_url")
+        self.results = ttk.Treeview(self.result_panel, columns=columns, show="headings", selectmode="extended")
+        for col, title, width in (("conference", "会议", 80), ("year", "年份", 70), ("title", "标题", 410),
+                                  ("authors", "作者", 200), ("abstract_status", "摘要", 70), ("pdf_status", "PDF", 90), ("source_url", "来源", 220)):
             self.results.heading(col, text=title)
             self.results.column(col, width=width, anchor="w")
-
         yscroll = ttk.Scrollbar(self.result_panel, orient="vertical", command=self.results.yview)
         xscroll = ttk.Scrollbar(self.result_panel, orient="horizontal", command=self.results.xview)
         self.results.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
-
         self.results.grid(row=0, column=0, sticky="nsew")
         yscroll.grid(row=0, column=1, sticky="ns")
         xscroll.grid(row=1, column=0, sticky="ew")
         self.result_panel.rowconfigure(0, weight=1)
         self.result_panel.columnconfigure(0, weight=1)
+        self.results.bind("<<TreeviewSelect>>", self._show_paper_details)
+        self.coverage_view = ScrolledText(notebook, wrap="word", state="disabled")
+        self.summary_view = ScrolledText(notebook, wrap="word", state="disabled")
+        self.detail_view = ScrolledText(notebook, wrap="word", state="disabled")
+        notebook.add(self.coverage_view, text="覆盖范围")
+        notebook.add(self.summary_view, text="命中统计")
+        notebook.add(self.detail_view, text="摘要与命中依据")
+        self._search_mode_changed()
 
-        ttk.Label(
-            self.result_panel,
-            text="说明：仅按标题进行模糊匹配。可搜索多个年份。",
-            style="Hint.TLabel",
-        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
+    @staticmethod
+    def _set_text(widget, text: str) -> None:
+        widget.configure(state="normal")
+        widget.delete("1.0", END)
+        widget.insert("1.0", text)
+        widget.configure(state="disabled")
+
+    def _search_mode_changed(self) -> None:
+        if self.search_mode.get() == "主题多字段":
+            self.title_controls.grid_remove()
+            self.topic_controls.grid()
+        else:
+            self.topic_controls.grid_remove()
+            self.title_controls.grid()
+
+    def _load_topic_config(self) -> None:
+        path = filedialog.askopenfilename(title="加载主题配置", filetypes=[("JSON", "*.json")])
+        if not path:
+            return
+        try:
+            config = json.loads(Path(path).read_text(encoding="utf-8"))
+            search.validate_config(config)
+        except (OSError, ValueError, KeyError, TypeError, collector.argparse.ArgumentTypeError) as exc:
+            messagebox.showerror("配置无效", str(exc))
+            return
+        self.topic_config = config
+        self.search_mode.set("主题多字段")
+        self._search_mode_changed()
+        targets = ", ".join(f"{t['conference']} {t['year']}" for t in config["targets"])
+        self.topic_config_hint.set(f"使用配置 {Path(path).name}：{targets}；分组 {', '.join(config['query_groups'])}；字段 {', '.join(config.get('search_fields', topic.SEARCH_FIELDS))}。上方手动会议/年份不生效。")
+        for widget in (self.topic_terms_entry, self.topic_context_entry, *self.field_buttons):
+            widget.configure(state="disabled")
+
+    def _clear_topic_config(self) -> None:
+        self.topic_config = None
+        self.topic_config_hint.set("手动主题：词组用分号分隔；上下文词可留空。")
+        for widget in (self.topic_terms_entry, self.topic_context_entry, *self.field_buttons):
+            widget.configure(state="normal")
+
+    def _manual_targets(self, root: Path) -> list[dict]:
+        years = self._iter_years(root, self._parse_year(self.search_year_start.get()), self._parse_year(self.search_year_end.get()))
+        if not years:
+            raise ValueError("未找到年份目录，请指定年份并先抓取论文。")
+        return [dict(conference=key, year=year) for year in years
+                for key in self._target_search_conferences(self.search_conference.get())]
+
+    def _topic_request(self, root: Path) -> dict:
+        if self.topic_config is not None:
+            return self.topic_config
+        terms = [term.strip() for term in self.topic_terms.get().replace("；", ";").split(";") if term.strip()]
+        context = [term.strip() for term in self.topic_context.get().replace("；", ";").split(";") if term.strip()]
+        config = dict(targets=self._manual_targets(root), context_anchors=context,
+                      search_fields=[field for field, variable in self.topic_fields.items() if variable.get()],
+                      query_groups={"topic": dict(terms=terms, direct=not bool(context))})
+        search.validate_config(config)
+        return config
+
+    def _save_topic_config(self) -> None:
+        try:
+            config = self._topic_request(Path(self.output_root.get()).expanduser().resolve())
+            path = filedialog.asksaveasfilename(title="保存主题配置", defaultextension=".json", filetypes=[("JSON", "*.json")])
+            if path:
+                collector.write_json(Path(path), config)
+        except (OSError, ValueError, KeyError, TypeError, collector.argparse.ArgumentTypeError) as exc:
+            messagebox.showerror("保存失败", str(exc))
+
+    def _export_search_report(self) -> None:
+        if self.search_stale:
+            messagebox.showwarning("导出", "摘要已更新，请重新搜索后再导出本次结果与统计。")
+            return
+        if self.last_search_result is None:
+            messagebox.showwarning("导出", "请先完成搜索")
+            return
+        directory = filedialog.askdirectory(title="选择本次结果输出目录（同名结果文件会覆盖）")
+        if directory:
+            try:
+                search.write_search_outputs(Path(directory), self.last_search_result, self.last_search_request)
+                self.status.set(f"已导出结果、覆盖范围与命中统计：{directory}")
+            except (OSError, ValueError) as exc:
+                messagebox.showerror("导出失败", str(exc))
+
+    def _show_paper_details(self, _event=None) -> None:
+        selected = self._selected_result_rows()
+        if not selected:
+            return
+        row = selected[0][1]
+        evidence = "\n".join(f"{hit.get('query_group', '')} | {hit.get('field', '')} | {hit.get('term', '')}\n{hit.get('text', '')}" for hit in row.get("matched_snippets", []))
+        self._set_text(self.detail_view, f"{row.get('title', '')}\n\n摘要来源：{row.get('abstract_source') or '原始快照/未提供'}\n{row.get('abstract_source_url', '')}\n\n{row.get('abstract') or '缺少摘要'}\n\n命中依据：\n{evidence}")
 
     def _selected_fetch_conferences(self, conference: str) -> list[str]:
         if conference == "ALL":
@@ -449,8 +520,10 @@ class PaperUI:
         )
 
     def _set_action_buttons(self, state: str) -> None:
-        for button in (self.abstract_button, self.export_button, self.pdf_button, self.search_button):
+        for button in (self.abstract_button, self.export_button, self.pdf_button, self.search_button, self.report_button):
             button.config(state=state)
+        if self.search_stale or self.last_search_result is None:
+            self.report_button.config(state="disabled")
 
     def _start_abstract_enrichment(self) -> None:
         selected = self._selected_result_rows()
@@ -478,7 +551,7 @@ class PaperUI:
             )
             self.root.after(0, self._abstract_done, selected, rows, failures)
         except Exception as exc:
-            self.root.after(0, lambda: self._action_error("摘要获取失败", str(exc)))
+            self.root.after(0, self._action_error, "摘要获取失败", str(exc))
 
     def _abstract_done(
         self,
@@ -489,9 +562,15 @@ class PaperUI:
         for (item_id, _old_row), row in zip(selected, rows):
             self.result_rows[item_id] = row
             self._update_result_item(item_id, row)
+        self.search_stale = True
+        stale_notice = "摘要已更新：请重新搜索以更新候选、命中依据和统计；整体结果导出暂不可用。"
+        self.search_coverage_hint.set(stale_notice)
+        self._set_text(self.coverage_view, stale_notice)
+        self._set_text(self.summary_view, stale_notice)
         self._set_action_buttons("normal")
         success_count = len(rows) - len(failures)
-        self.status.set(f"摘要处理完成：成功 {success_count}，失败 {len(failures)}")
+        self.status.set(f"摘要处理完成：成功 {success_count}，失败 {len(failures)}；重新搜索可更新候选与统计")
+        self._show_paper_details()
         if failures:
             messagebox.showwarning(
                 "摘要处理完成",
@@ -524,7 +603,7 @@ class PaperUI:
             )
             self.root.after(0, self._pdf_done, selected, rows, failures)
         except Exception as exc:
-            self.root.after(0, lambda: self._action_error("PDF 下载失败", str(exc)))
+            self.root.after(0, self._action_error, "PDF 下载失败", str(exc))
 
     def _pdf_done(
         self,
@@ -734,13 +813,15 @@ class PaperUI:
     def _iter_years(self, root: Path, start: int | None, end: int | None) -> list[int]:
         years: list[int] = []
         if start is None and end is None:
+            if not root.is_dir():
+                return []
             for item in sorted(root.iterdir(), key=lambda p: p.name):
                 if item.is_dir() and item.name.isdigit():
                     years.append(int(item.name))
             return years
 
         if start is not None and end is not None and start > end:
-            start, end = end, start
+            raise ValueError("起始年份不能大于结束年份")
 
         if start is None:
             start = end
@@ -749,62 +830,67 @@ class PaperUI:
         return list(range(int(start), int(end) + 1))
 
     def _search(self) -> None:
-        conference = self.search_conference.get().strip().upper()
-        query = self.search_text.get().strip().casefold()
-        if not query:
-            messagebox.showwarning("搜索", "请输入标题关键词")
+        if self.search_busy:
             return
-
         try:
-            root = Path(self.output_root.get().strip()).expanduser().resolve()
-            start_year = self._parse_year(self.search_year_start.get())
-            end_year = self._parse_year(self.search_year_end.get())
-        except (ValueError, OSError, collector.argparse.ArgumentTypeError) as exc:
-            messagebox.showerror("输入无效", str(exc))
+            if not self.output_root.get().strip():
+                raise ValueError("论文目录不能为空")
+            root = Path(self.output_root.get()).expanduser().resolve()
+            if self.search_mode.get() == "主题多字段":
+                config = self._topic_request(root)
+                query, targets = None, config["targets"]
+            else:
+                query = self.search_text.get().strip()
+                search.titles.parse_query(query)
+                targets, config = self._manual_targets(root), None
+        except (OSError, ValueError, KeyError, TypeError, collector.argparse.ArgumentTypeError) as exc:
+            messagebox.showerror("搜索条件无效", str(exc))
             return
-
-        years = self._iter_years(root, start_year, end_year)
-        if not years:
-            messagebox.showinfo("搜索", "未找到可搜索年份目录")
-            return
-
+        self.last_search_result = None
+        self.last_search_request = None
         for item in self.results.get_children():
             self.results.delete(item)
         self.result_rows.clear()
-        self.search_query = query
+        for view in (self.coverage_view, self.summary_view, self.detail_view):
+            self._set_text(view, "")
+        self.search_coverage_hint.set("正在读取本地论文和已有摘要…")
+        self.search_busy = True
+        self._set_action_buttons("disabled")
+        self.status.set("搜索中…")
+        request = dict(query=query, config=config, targets=targets, snapshot_output_root=str(root))
+        threading.Thread(target=self._search_worker, args=(root, request), daemon=True).start()
 
-        keys = self._target_search_conferences(conference)
+    def _search_worker(self, root: Path, request: dict) -> None:
+        try:
+            result = search.search_local(root, request["targets"], query=request["query"], config=request["config"])
+            self.root.after(0, self._search_done, result, request)
+        except Exception as exc:
+            self.root.after(0, self._search_failed, str(exc))
 
-        matches = 0
-        for year in years:
-            for key in keys:
-                path = root / str(year) / key / f"{key}_{year}_accepted_papers.csv"
-                if not path.exists():
-                    continue
-                with path.open("r", encoding="utf-8-sig", newline="") as handle:
-                    for row in csv.DictReader(handle):
-                        if query in str(row.get("title", "")).casefold():
-                            result_row = dict(row)
-                            result_row["year"] = row.get("year") or year
-                            item_id = self.results.insert(
-                                "",
-                                END,
-                                values=(
-                                    "KDD" if key == "SIGKDD" else row.get("conference", key),
-                                    year,
-                                    row.get("title", ""),
-                                    row.get("authors", ""),
-                                    self._row_abstract_status(result_row),
-                                    self._row_pdf_status(result_row),
-                                    row.get("source_url", ""),
-                                ),
-                            )
-                            self.result_rows[item_id] = result_row
-                            matches += 1
+    def _search_failed(self, detail: str) -> None:
+        self.search_busy = False
+        self.search_coverage_hint.set("搜索失败，未生成本次结果。")
+        self._action_error("搜索失败", detail)
 
-        self.status.set(f"找到 {matches} 条匹配论文")
-        if matches == 0:
-            messagebox.showinfo("搜索", "未匹配到论文；请确认年份和输出目录是否正确")
+    def _search_done(self, result: dict, request: dict) -> None:
+        self.search_busy = False
+        self.search_stale = False
+        self.last_search_result, self.last_search_request = result, request
+        self._set_action_buttons("normal")
+        self.search_query = request["query"] or json.dumps(request["config"], ensure_ascii=False)
+        for row in result["candidates"]:
+            item_id = self.results.insert("", END)
+            self.result_rows[item_id] = row
+            self._update_result_item(item_id, row)
+        coverage = search.coverage_text(result)
+        self._set_text(self.coverage_view, coverage)
+        self.search_coverage_hint.set("\n".join(coverage.splitlines()[:2]))
+        lines = ["原始命中数 = 词语/字段命中证据条数；去重数 = 该会议年份、分组、字段中的论文数。"]
+        for item in result["summary"]:
+            lines.append(f"{item['conference']} {item['year']} | {item['query_group']} | {item['matched_field']}：证据 {item['raw_match_count']}，论文 {item['deduplicated_match_count']}")
+        self._set_text(self.summary_view, "\n".join(lines) if result["summary"] else "标题查询的逐会议、逐年份论文数量见覆盖范围页。")
+        self.status.set(f"搜索完成：{len(result['candidates'])} 篇；" + ("本地覆盖完整" if result["complete"] else "覆盖不完整，请查看覆盖范围"))
+
 
 
 def main() -> None:

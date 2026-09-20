@@ -23,8 +23,6 @@ from .query_target_papers import token_matches, tokenize
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_CONFIG = PROJECT_ROOT / "configs" / "agent_memory_self_evolving_2026.json"
-DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "research_results" / "agent_memory_self_evolving_2026"
 DEFAULT_SNAPSHOT_ROOT = PROJECT_ROOT / "output"
 
 SEARCH_FIELDS = ("title", "abstract", "keywords", "tldr")
@@ -33,9 +31,10 @@ CANDIDATE_FIELDS = [
     "primary_area", "secondary_area", "topic", "openreview_id",
     "source_record_id", "source_url", "openreview_url", "paper_url", "pdf_url",
     "matched_query_groups", "matched_terms", "matched_fields", "matched_snippets",
+    "abstract_source", "abstract_source_url", "abstract_retrieved_at", "abstract_match_confidence",
 ]
 SUMMARY_FIELDS = [
-    "conference", "query_group", "matched_field", "raw_match_count",
+    "conference", "year", "query_group", "matched_field", "raw_match_count",
     "deduplicated_match_count",
 ]
 
@@ -71,9 +70,12 @@ def matched_snippet(text: Any, term: str, *, limit: int = 260) -> str:
     source = re.sub(r"\s+", " ", str(text or "")).strip()
     if len(source) <= limit:
         return source
-    first = tokenize(term)[0] if tokenize(term) else ""
-    match = re.search(r"\b" + re.escape(first), source, flags=re.IGNORECASE)
-    center = match.start() if match else 0
+    wanted = tokenize(term)
+    tokens = [(token, match.start()) for match in re.finditer(r"[^\W_]+", source)
+              for token in tokenize(match.group())]
+    center = next((tokens[index][1] for index in range(len(tokens) - len(wanted) + 1)
+                   if wanted and all(token_matches(term_token, tokens[index + offset][0])
+                                     for offset, term_token in enumerate(wanted))), 0)
     start = max(0, center - limit // 3)
     end = min(len(source), start + limit)
     prefix = "..." if start else ""
@@ -86,6 +88,8 @@ def paper_identity(row: dict[str, Any]) -> str:
     for field in ("openreview_id", "source_record_id", "doi"):
         value = str(row.get(field, "")).strip()
         if value:
+            if field == "source_record_id":
+                return f"{field}:{row.get('conference', '')}:{row.get('year', '')}:{value}"
             return f"{field}:{value}"
     return f"title:{normalize_text(row.get('title'))}:{row.get('year', '')}"
 
@@ -143,7 +147,7 @@ def search_papers(
             for item in record["_evidence"]
         }
         for item in evidence:
-            keyed = {"conference": str(row.get("conference", "")), "paper_key": identity, **item}
+            keyed = {"conference": str(row.get("conference", "")), "year": str(row.get("year", "")), "paper_key": identity, **item}
             raw_evidence.append(keyed)
             key = (item["group"], item["term"], item["field"], item["snippet"])
             if key not in known:
@@ -210,7 +214,8 @@ def collect_snapshots(
                     for row in rows
                 ),
                 "paper_ids_unique": len(identities) == len(set(identities)),
-                "exact_venue_id_matches": all(str(row.get("venueid", "")) == exact_venue for row in rows),
+                "exact_venue_id_matches": (manifest.get("source_kind", spec.source_kind) != "openreview"
+                                           or all(str(row.get("venueid", "")) == exact_venue for row in rows)),
             }
             if not all(integrity.values()):
                 raise RuntimeError(f"Snapshot integrity check failed: {integrity}")
@@ -219,7 +224,7 @@ def collect_snapshots(
             jsonl_path = Path(manifest["outputs"]["jsonl"])
             snapshots.append({
                 "conference": conference, "year": year,
-                "venue_id": exact_venue, "source_kind": manifest.get("source_kind", ""),
+                "venue_id": manifest.get("venue_id", ""), "source_kind": manifest.get("source_kind", ""),
                 "collection_status": manifest.get("collection_status", ""),
                 "accepted_paper_count": len(rows), "fetched_at_utc": manifest.get("fetched_at_utc", ""),
                 "source_manifest_path": str(manifest_path),
@@ -247,15 +252,21 @@ def enrich_missing_candidate_abstracts(
     return [by_key.get(paper_identity(row), row) for row in candidates], failures
 
 
-def build_query_summary(raw_evidence: list[dict[str, str]]) -> list[dict[str, Any]]:
-    raw_counts: dict[tuple[str, str, str], int] = defaultdict(int)
-    papers: dict[tuple[str, str, str], set[str]] = defaultdict(set)
+def build_query_summary(raw_evidence: list[dict[str, str]], config: dict | None = None) -> list[dict[str, Any]]:
+    raw_counts: dict[tuple[str, str, str, str], int] = defaultdict(int)
+    papers: dict[tuple[str, str, str, str], set[str]] = defaultdict(set)
+    if config:
+        for target in config["targets"]:
+            for group in config["query_groups"]:
+                for field in config.get("search_fields", SEARCH_FIELDS):
+                    key = (collector.normalize_conference_argument(target["conference"]), str(target["year"]), group, field)
+                    raw_counts[key] = 0
     for item in raw_evidence:
-        key = (item["conference"], item["group"], item["field"])
+        key = (item["conference"], item["year"], item["group"], item["field"])
         raw_counts[key] += 1
         papers[key].add(item["paper_key"])
     return [
-        {"conference": key[0], "query_group": key[1], "matched_field": key[2],
+        {"conference": key[0], "year": key[1], "query_group": key[2], "matched_field": key[3],
          "raw_match_count": raw_counts[key], "deduplicated_match_count": len(papers[key])}
         for key in sorted(raw_counts)
     ]
@@ -309,12 +320,15 @@ def write_readme(output_dir: Path, config: dict[str, Any], command: str) -> Path
 def run_pipeline(config_path: Path, output_dir: Path, snapshot_root: Path) -> dict[str, Any]:
     started = utc_now()
     config = json.loads(config_path.read_text(encoding="utf-8"))
+    from .paper_search import validate_config
+    validate_config(config)
     papers, snapshots, collection_errors, warnings = collect_snapshots(config, snapshot_root)
+    papers = paper_enrichment.load_cached_abstracts(papers, snapshot_root)
     initial_candidates, initial_evidence = search_papers(papers, config)
     candidates, abstract_errors = enrich_missing_candidate_abstracts(initial_candidates, snapshot_root)
     # Re-run matching so newly enriched abstracts contribute auditable evidence.
     candidates, raw_evidence = search_papers(candidates, config)
-    summary = build_query_summary(raw_evidence)
+    summary = build_query_summary(raw_evidence, config)
     csv_path, jsonl_path = write_candidate_files(output_dir, candidates)
     summary_path = output_dir / "query_summary.csv"
     collector.write_csv(summary_path, summary, SUMMARY_FIELDS)
@@ -327,7 +341,7 @@ def run_pipeline(config_path: Path, output_dir: Path, snapshot_root: Path) -> di
         "started_at_utc": started, "completed_at_utc": utc_now(), "git_commit": _git_commit(),
         "config_path": str(config_path.resolve()), "config_sha256": _sha256_file(config_path),
         "input_conferences": config["targets"], "snapshots": snapshots,
-        "accepted_paper_counts": {item["conference"]: item["accepted_paper_count"] for item in snapshots},
+        "accepted_paper_counts": {f"{item['conference']}-{item['year']}": item["accepted_paper_count"] for item in snapshots},
         "initial_raw_match_count": len(initial_evidence),
         "initial_candidate_count": len(initial_candidates),
         "deduplicated_candidate_count": len(candidates),
@@ -345,14 +359,14 @@ def run_pipeline(config_path: Path, output_dir: Path, snapshot_root: Path) -> di
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="High-recall multi-field research-topic retrieval")
-    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
-    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument("--config", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--snapshot-output-root", type=Path, default=DEFAULT_SNAPSHOT_ROOT)
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv or sys.argv[1:])
+    args = parse_args(sys.argv[1:] if argv is None else argv)
     try:
         manifest = run_pipeline(args.config.resolve(), args.output_dir.resolve(), args.snapshot_output_root.resolve())
     except (OSError, ValueError, RuntimeError) as exc:

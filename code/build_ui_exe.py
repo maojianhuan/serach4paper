@@ -55,6 +55,12 @@ def _run_pyinstaller(name: str, dist_dir: Path, build_temp: Path) -> None:
         "code.fetch_openreview_accepted",
         "--hidden-import",
         "code.paper_enrichment",
+        "--hidden-import",
+        "code.paper_search",
+        "--hidden-import",
+        "code.query_target_papers",
+        "--hidden-import",
+        "code.query_research_topic",
         f"--add-data={PROJECT_ROOT / 'code' / 'ccf_a_conferences.json'}{separator}code",
         str(ENTRYPOINT),
     ]
@@ -100,6 +106,8 @@ def build_ui_exe(
     output_root: Path = PROJECT_ROOT,
     skip_copy: bool = False,
 ) -> Path:
+    if os.name != "nt":
+        raise RuntimeError("Windows EXE 必须在 Windows Python 环境中构建。")
     output_root = output_root.resolve()
     dist_dir = output_root / "dist"
     build_temp = output_root / ".pyinstaller"

@@ -44,6 +44,9 @@ data/
 workbook_build/
 artifacts/
 
+# Personal research query configurations
+/configs/
+
 # Validation and smoke outputs
 ccf_a_validation*/
 tests/output/
