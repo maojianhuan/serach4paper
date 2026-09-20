@@ -84,7 +84,7 @@ python zotero-plugin/build.py
 
 Git 跟踪插件源码、`build.py`、`manifest.json` 中的版本号和发布工作流。`dist/` 保持在 `.gitignore` 中；正式 XPI 作为对应 GitHub Release 的附件保存，不提交到 Git。
 
-发布工作流为 [release-zotero.yml](../.github/workflows/release-zotero.yml)，只在推送 `zotero-v*` 标签时运行。它校验标签与 manifest 版本一致，运行 JavaScript 测试，从标签指向的源码打包，然后创建 Release 并上传 XPI。Release 说明取自带注释标签的消息。Python、Node 和 GitHub CLI 只在 GitHub 的构建环境中使用，不进入 XPI。
+发布工作流为 [release-zotero.yml](../.github/workflows/release-zotero.yml)，推送 `zotero-v*` 标签时运行。它校验标签与 manifest 版本一致，运行 JavaScript 测试，从标签指向的源码打包，然后创建 Release 并上传 XPI。Release 说明取自带注释标签的消息。Python、Node 和 GitHub CLI 只在 GitHub 的构建环境中使用，不进入 XPI。
 
 发布新版本时：
 
@@ -97,6 +97,8 @@ Git 跟踪插件源码、`build.py`、`manifest.json` 中的版本号和发布�
    ```
 
 3. 在仓库 Actions 页面确认发布工作流成功，并从 Release 下载 XPI 核对。普通源码推送、本地打包不会创建 Release。
+
+若标签推送后没有运行记录，可在 [Release Zotero plugin 工作流](https://github.com/maojianhuan/serach4paper/actions/workflows/release-zotero.yml) 中点击 **Run workflow**，选择 `main` 分支，输入已存在的标签（例如 `zotero-v0.1.2`）后启动。工作流仍从该标签打包，不会修改标签；已存在的 Release 不会被自动覆盖。
 
 Zotero 要求 manifest 提供更新清单地址；`updates.json` 当前为空，用户从 Release 下载后手动安装更新。发布 Release 本身不会启用插件自动更新。
 

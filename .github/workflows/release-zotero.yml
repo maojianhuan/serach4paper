@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - 'zotero-v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag, for example zotero-v0.1.2'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -11,8 +17,12 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-24.04
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Check tag matches plugin version
         id: version
@@ -24,7 +34,7 @@ jobs:
 
           version = json.loads(Path("zotero-plugin/manifest.json").read_text(encoding="utf-8"))["version"]
           expected = f"zotero-v{version}"
-          if os.environ["GITHUB_REF_NAME"] != expected:
+          if os.environ["RELEASE_TAG"] != expected:
               raise SystemExit(f"Release tag must be {expected}")
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"version={version}\n")
@@ -41,7 +51,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PLUGIN_VERSION: ${{ steps.version.outputs.version }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
+          gh release create "$RELEASE_TAG" \
             "dist/search4paper-${PLUGIN_VERSION}.xpi" \
             --verify-tag \
             --title "search4paper for Zotero ${PLUGIN_VERSION}" \
