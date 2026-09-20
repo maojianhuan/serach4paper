@@ -287,6 +287,104 @@ async function runSearch4PaperPDFSmoke({ expectedDataDir, pdfURL, fixturePath, r
   return report;
 }
 
+// Exercises the actual popup and hit testing, rather than assigning select.value.
+// Creates a parent/child collection and one clearly labelled fixture item in the
+// isolated library. No OpenReview request or PDF download is made.
+async function runSearch4PaperDropdownSmoke({ expectedDataDir, reportPath }) {
+  const assert = (condition, message) => { if (!condition) throw new Error(message); };
+  const report = { zotero: Zotero.version, selections: [] };
+  const waitFor = async (predicate, message) => {
+    const start = Date.now();
+    while (!predicate()) {
+      if (Date.now() - start > 5000) throw new Error(message);
+      await Zotero.Promise.delay(50);
+    }
+  };
+  let win;
+  try {
+    assert(expectedDataDir && Zotero.DataDirectory.dir === expectedDataDir, 'Use an explicitly selected isolated test data directory');
+    const previous = [...Services.wm.getEnumerator(null)].find(w => w.location.href === 'chrome://search4paper/content/search.xhtml');
+    previous?.close();
+    if (previous) await waitFor(() => previous.closed, 'Previous plugin window did not close');
+    document.getElementById('search4paper-open').doCommand();
+    await waitFor(() => {
+      win = [...Services.wm.getEnumerator(null)].find(w => w.location.href === 'chrome://search4paper/content/search.xhtml');
+      return win && !win.closed && win.Search4PaperUI && win.document.readyState === 'complete';
+    }, 'Plugin window did not open');
+    win.resizeTo(980, 720); win.focus();
+    await waitFor(() => win.document.hasFocus(), 'Plugin window did not receive focus');
+    await new Promise(resolve => win.requestAnimationFrame(() => win.requestAnimationFrame(resolve)));
+    const ui = win.Search4PaperUI;
+    const click = element => {
+      const r = element.getBoundingClientRect();
+      const x = r.x + r.width / 2, y = r.y + r.height / 2;
+      win.windowUtils.sendMouseEvent('mousemove', x, y, 0, 0, 0);
+      win.windowUtils.sendMouseEvent('mousedown', x, y, 0, 1, 0);
+      win.windowUtils.sendMouseEvent('mouseup', x, y, 0, 1, 0);
+    };
+    const selectByMouse = async (id, value) => {
+      const select = ui.$(id), previous = select.value;
+      const index = [...select.options].findIndex(option => option.value === value);
+      assert(index >= 0, `Missing option ${id}: ${value}`);
+      let changed = false;
+      const onChange = event => { changed = event.isTrusted; };
+      select.addEventListener('change', onChange);
+      try {
+        click(select);
+        let popup;
+        await waitFor(() => {
+          popup = win.document.getElementById('ContentSelectDropdownPopup');
+          return popup?.state === 'open';
+        }, `${id}: dropdown did not open`);
+        const item = [...popup.querySelectorAll('menuitem')].find(item => item.value === String(index));
+        assert(item && item.label === select.options[index].label, `${id}: option label missing from popup`);
+        item.scrollIntoView({ block: 'nearest' });
+        await Zotero.Promise.delay(50);
+        click(item);
+        await waitFor(() => select.value === value && popup.state === 'closed', `${id}: clicking the visible option did not select ${value}`);
+        assert(previous === value || changed, `${id}: selection must fire a trusted change event`);
+        report.selections.push({ id, value, label: select.options[index].label });
+      }
+      finally { select.removeEventListener('change', onChange); }
+    };
+    for (const conference of ['NeurIPS', 'ICLR', 'ICML']) {
+      ui.filtersDirty = false;
+      await selectByMouse('conference', conference);
+      assert(ui.filtersDirty, 'Conference selection must invalidate the previous search');
+    }
+    const parent = new Zotero.Collection();
+    parent.name = 'search4paper dropdown fixture ' + Date.now();
+    parent.libraryID = Zotero.Libraries.userLibraryID;
+    await parent.saveTx();
+    const child = new Zotero.Collection();
+    child.name = '时间序列异常检测'; child.libraryID = parent.libraryID; child.parentID = parent.id;
+    await child.saveTx();
+    ui.refreshCollections();
+    for (const value of [String(parent.id), String(child.id), '', String(child.id)]) await selectByMouse('collection', value);
+    click(ui.$('refresh'));
+    assert(ui.$('collection').value === String(child.id), 'Refreshing collections must keep the selected child');
+
+    const marker = 'DropdownFixture' + Date.now();
+    const paper = { id: marker, title: 'Dropdown regression fixture: time series anomaly detection', year: 2026,
+      venueID: 'ICML.cc/2026/Conference', authors: ['Test Author'], doi: '',
+      url: 'https://example.org/' + marker, abstract: 'Synthetic UI test fixture, not a real paper.', evidence: [] };
+    ui.query = { terms: ['anomaly detection'], context: ['time series'], fields: ['title'] };
+    ui.candidates = [paper]; ui.selected = new Set([paper.id]); ui.filtersDirty = false;
+    ui.$('new-collection').value = ''; ui.$('include-pdf').checked = false;
+    ui.render(); ui.preview(paper);
+    click(ui.$('import'));
+    await waitFor(() => !ui.busy, 'Fixture import did not finish');
+    assert(ui.lastImport?.collectionID === child.id, ui.$('status').textContent);
+    assert(ui.lastImport.results.length === 1 && ui.lastImport.results[0].item?.inCollection(child.id), 'Fixture must be imported into the child selected through the popup');
+    report.importedInto = child.id;
+    report.ok = true;
+  }
+  catch (error) { report.ok = false; report.error = String(error); report.stack = error.stack; }
+  finally { win?.document.getElementById('ContentSelectDropdownPopup')?.hidePopup(); }
+  await IOUtils.writeJSON(reportPath, report);
+  return report;
+}
+
 async function runSearch4PaperImportFailureSmoke({ expectedDataDir, reportPath }) {
   const assert = (condition, message) => { if (!condition) throw new Error(message); };
   const report = {};

@@ -6,11 +6,11 @@
 
 ## 安装与使用
 
-下载：[search4paper-0.1.2.xpi](https://github.com/maojianhuan/serach4paper/releases/download/zotero-v0.1.2/search4paper-0.1.2.xpi) · [版本说明与源码标签](https://github.com/maojianhuan/serach4paper/releases/tag/zotero-v0.1.2) · [全部版本](https://github.com/maojianhuan/serach4paper/releases)。选择 Release 中的 `.xpi` 附件；GitHub 自动提供的 Source code 压缩包是源码，不能直接作为插件安装。
+下载：[search4paper-0.1.3.xpi](https://github.com/maojianhuan/serach4paper/releases/download/zotero-v0.1.3/search4paper-0.1.3.xpi) · [版本说明与源码标签](https://github.com/maojianhuan/serach4paper/releases/tag/zotero-v0.1.3) · [全部版本](https://github.com/maojianhuan/serach4paper/releases)。选择 Release 中的 `.xpi` 附件；GitHub 自动提供的 Source code 压缩包是源码，不能直接作为插件安装。
 
 同一个 XPI 用于 Windows、Linux、macOS，无需为不同系统重新生成。目前 manifest 适配 Zotero 10.0.x；Linux + Zotero 10.0.3 已实测，Windows/macOS 尚未验收。安装者只需要 Zotero 和 XPI，不需要 Python、Node 或任何 EXE。
 
-1. 在 Zotero 10 中打开 **工具 → 插件（Tools → Plugins）**，点击齿轮菜单的 **从文件安装插件（Install Plugin From File）**，选择下载的 `search4paper-0.1.2.xpi`。
+1. 在 Zotero 10 中打开 **工具 → 插件（Tools → Plugins）**，点击齿轮菜单的 **从文件安装插件（Install Plugin From File）**，选择下载的 `search4paper-0.1.3.xpi`。从旧版升级后重启 Zotero，使窗口样式重新加载。
 2. 打开 **工具 → search4paper：检索 OpenReview 论文…**。
 3. 从下拉框选择 **ICML / NeurIPS / ICLR**，用现有年份控件输入或调节年份，再输入研究方向词组和可选上下文词组，点击 **搜索论文**。例如会议 `ICLR`、年份 `2026`、主题 `anomaly detection`、上下文 `time series`。
 4. 点击候选标题查看作者、摘要和逐字段命中依据；勾选需要导入的论文。结果每页 100 篇，跨页选择保留，“选中本页”只选当前页。
@@ -71,12 +71,12 @@ python zotero-plugin/build.py
 
 若 Python 3 的命令名不同，Linux/macOS 可用 `python3 zotero-plugin/build.py`，Windows 可用 `py -3 zotero-plugin/build.py`。这是开发者打包步骤，插件运行时不会执行这些命令。
 
-版本号从 `manifest.json` 读取；当前产物为 `dist/search4paper-0.1.2.xpi`。构建脚本将 manifest、bootstrap 和 HTML/CSS/JavaScript 打包为 ZIP 格式的 XPI，不包含论文快照、Python、测试代码或平台二进制。源码或版本变化后重新打包一次即可，跨操作系统使用无需重新构建。
+版本号从 `manifest.json` 读取；当前产物为 `dist/search4paper-0.1.3.xpi`。构建脚本将 manifest、bootstrap 和 HTML/CSS/JavaScript 打包为 ZIP 格式的 XPI，不包含论文快照、Python、测试代码或平台二进制。源码或版本变化后重新打包一次即可，跨操作系统使用无需重新构建。
 
 | 文件 | 用途 |
 | --- | --- |
 | `zotero-plugin/build.py` | 生成 Zotero 插件 XPI；仅打包时需要 Python 3 |
-| `dist/search4paper-0.1.2.xpi` | 用户安装到 Zotero 的插件 |
+| `dist/search4paper-0.1.3.xpi` | 用户安装到 Zotero 的插件 |
 | `search4paper-ui.exe` | 另一个独立 Windows 应用，不生成 XPI |
 | `code/build_ui_exe.py` | 使用 PyInstaller 构建上述 EXE，与 XPI 无关 |
 
@@ -89,26 +89,32 @@ Git 跟踪插件源码、`build.py`、`manifest.json` 中的版本号和发布�
 发布新版本时：
 
 1. 更新 `manifest.json` 版本、README 中的版本下载链接和验证记录，提交并推送源码。
-2. 对该提交创建带注释标签，并在标签消息中说明变更和实际验证范围。下面以 `0.1.2` 为示例；后续发布需替换成新版本号，不覆盖已发布标签或安装包。
+2. 对该提交创建带注释标签，并在标签消息中说明变更和实际验证范围。下面以 `0.1.3` 为示例；后续发布需替换成新版本号，不覆盖已发布标签或安装包。
 
    ```bash
-   git tag -a zotero-v0.1.2 -m "search4paper for Zotero 0.1.2"
-   git push origin zotero-v0.1.2
+   git tag -a zotero-v0.1.3 -m "search4paper for Zotero 0.1.3"
+   git push origin zotero-v0.1.3
    ```
 
 3. 在仓库 Actions 页面确认发布工作流成功，并从 Release 下载 XPI 核对。普通源码推送、本地打包不会创建 Release。
 
-若标签推送后没有运行记录，可在 [Release Zotero plugin 工作流](https://github.com/maojianhuan/serach4paper/actions/workflows/release-zotero.yml) 中点击 **Run workflow**，选择 `main` 分支，输入已存在的标签（例如 `zotero-v0.1.2`）后启动。工作流仍从该标签打包，不会修改标签；已存在的 Release 不会被自动覆盖。
+若标签推送后没有运行记录，可在 [Release Zotero plugin 工作流](https://github.com/maojianhuan/serach4paper/actions/workflows/release-zotero.yml) 中点击 **Run workflow**，选择 `main` 分支，输入已存在的标签（例如 `zotero-v0.1.3`）后启动。工作流仍从该标签打包，不会修改标签；已存在的 Release 不会被自动覆盖。
 
 Zotero 要求 manifest 提供更新清单地址；`updates.json` 当前为空，用户从 Release 下载后手动安装更新。发布 Release 本身不会启用插件自动更新。
 
 ## 验证
+
+0.1.3 修复会议和导入位置下拉菜单无法点击、文字重叠的问题：窗口加载 Gecko 原生控件样式，并保留原生下拉箭头。搜索和导入逻辑沿用原实现。
+
+0.1.3 验证记录（2026-09-20，Linux + Xvfb + Zotero 10.0.3）：24 项 JavaScript 测试通过。新增原生窗口回归测试通过坐标发送鼠标事件，实际展开并点击菜单，不直接赋值 `select.value`；原始 0.1.2 XPI 在首次选择 NeurIPS 时失败，0.1.3 通过三个会议、文献库根目录、父集合、子集合的选择，刷新后保留选中位置，并把一个明确标注的测试条目导入所选子集合。重启 Zotero、重开插件后，键盘选择会议和集合、980×720 窗口显示也已验证；选择 ICLR 2026 后从已有本地名单读取 5,351 篇论文、筛出 17 篇候选。此前的检索测试直接设置控件值，未覆盖菜单展开与实际点击；此处补齐该检查。Windows/macOS 尚未实测。
 
 纯 JavaScript 检索及元数据校验测试使用 Node 20+ 自带的测试运行器，无需安装 npm 依赖：
 
 ```bash
 node --test tests/test_zotero_plugin.cjs
 ```
+
+下拉菜单回归测试为 `tests/zotero_plugin_smoke.js` 中的 `runSearch4PaperDropdownSmoke({ expectedDataDir, reportPath })`，按下文真实 Zotero 脚本的方式加载。仅在独立测试 profile/data 中运行；会创建测试父子集合和一个合成文献条目，不联网抓取论文或下载 PDF。它需要真实 Zotero 窗口，不能用 Node 测试代替。手工验收时还应分别用鼠标和键盘展开两个下拉框，确认选项、下拉箭头和完整集合路径可见，选中后值确实改变。
 
 会议/年份搜索的真实 Zotero 测试脚本为 `tests/zotero_plugin_search_smoke.js`，只获取和保存元数据、筛选并预览，不创建文献条目。安装新版 XPI 后，在独立测试 profile/data 中通过 **Tools → Developer → Run JavaScript** 运行：
 
