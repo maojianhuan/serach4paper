@@ -1,6 +1,7 @@
 /* Runs only in the privileged plugin window; no localhost service is used. */
 var Search4PaperUI = {
   Zotero: window.arguments[0].Zotero,
+  ieee: window.arguments[0].ieeeSession,
   papers: [], candidates: [], selected: new Set(), active: null,
   page: 0, pageSize: 100, busy: false, controller: null, query: null, loadedYear: null, loadedConference: null, filtersDirty: true,
   labels: { title: "标题", abstract: "摘要", keywords: "关键词", tldr: "TLDR" },
@@ -14,7 +15,9 @@ var Search4PaperUI = {
     this.$("cancel").disabled = !this.busy;
     if (this.busy) return;
     this.$("filter").disabled = !this.papers.length;
-    this.$("import").disabled = !this.selected.size || this.filtersDirty || this.$("conference").value !== "ICML";
+    this.$("import").disabled = !this.selected.size || this.filtersDirty;
+    this.$("import").title = this.filtersDirty ? "检索条件已修改，请先搜索论文或应用筛选。"
+      : !this.selected.size ? "请勾选论文左侧的复选框，或点击“选中本页”。" : "导入到所选文献库位置。";
     this.$("select-page").disabled = !this.candidates.length;
     this.$("clear").disabled = !this.selected.size;
     this.$("previous").disabled = this.page === 0;
@@ -40,19 +43,32 @@ var Search4PaperUI = {
   },
   readQuery() {
     const query = { terms: Search4PaperCore.splitTerms(this.$("terms").value),
-      context: Search4PaperCore.splitTerms(this.$("context").value),
+      operator: this.$("operator").value,
       fields: Search4PaperCore.FIELDS.filter(field => this.$("field-" + field).checked) };
     Search4PaperCore.validateQuery(query);
     return query;
   },
-  async request(url, signal) {
+  updateQuerySummary() {
+    const terms = Search4PaperCore.splitTerms(this.$("terms").value);
+    const operator = this.$("operator").value;
+    this.$("query-expression").textContent = terms.length
+      ? terms.map(term => `“${term}”`).join(` ${operator} `)
+      : "请填写至少一个关键词。";
+    const fields = Search4PaperCore.FIELDS.filter(field => this.$("field-" + field).checked);
+    this.$("field-rule").textContent = fields.length
+      ? `查找位置：${fields.map(field => this.labels[field]).join(" / ")}。关键词可在任一勾选字段中命中，不同关键词可出现在不同字段。`
+      : "请至少勾选一个查找位置。";
+  },
+  async request(url, signal, responseType = "json") {
     signal.throwIfAborted();
     let cancel;
     const abort = () => cancel?.();
     signal.addEventListener("abort", abort, { once: true });
     try {
       const response = await this.Zotero.HTTP.request("GET", url, {
-        responseType: "json", timeout: 60000, errorDelayMax: 0, noRetryOnThrottle: true,
+        // Official proceedings XML/program files can exceed 10 MB on a slow connection.
+        responseType, timeout: url.startsWith("https://api2.openreview.net/") ? 60000 : 300000,
+        errorDelayMax: 0, noRetryOnThrottle: true,
         // A live ICML page at offset 5000 returned a cached empty response;
         // Cache-Control: no-cache returned the complete page and correct total.
         noCache: true, headers: { "Cache-Control": "no-cache" },
@@ -62,7 +78,7 @@ var Search4PaperUI = {
     }
     catch (error) {
       signal.throwIfAborted();
-      throw new Error(`OpenReview 请求失败${error.status ? `（HTTP ${error.status}）` : ""}：${error.message}`);
+      throw new Error(`论文来源请求失败${error.status ? `（HTTP ${error.status}）` : ""}：${url}\n${error.status === 404 ? "该会议年份的官方数据尚不可用。" : error.message}`);
     }
     finally { signal.removeEventListener("abort", abort); }
   },
@@ -71,6 +87,7 @@ var Search4PaperUI = {
     const conference = this.$("conference").value;
     const year = Number(this.$("year").value);
     const venueID = Search4PaperCore.venueID(conference, year);
+    const source = Search4PaperCore.sourceName(conference);
     const path = PathUtils.join(this.Zotero.DataDirectory.dir, "search4paper", conference, `${year}.json`);
     this.papers = []; this.loadedYear = null; this.loadedConference = null; this.query = null;
     this.candidates = []; this.selected.clear(); this.active = null; this.page = 0;
@@ -85,10 +102,10 @@ var Search4PaperUI = {
         catch (error) { throw new Error(`读取本地元数据失败：${error.message}\n${path}\n请点击“刷新名单”重新获取。`); }
       }
       else {
-        this.status("正在连接 OpenReview…");
-        const papers = await Search4PaperCore.fetchAccepted(year, {
-          conference, signal, request: (url, requestSignal) => this.request(url, requestSignal),
-          onProgress: (done, total) => this.status(`获取 ${conference} ${year}：${done} / ${total} 篇`)
+        this.status(`正在连接 ${source}…`);
+        const papers = await Search4PaperSources.fetchAccepted(year, {
+          conference, signal, request: (url, requestSignal, type) => this.request(url, requestSignal, type),
+          onProgress: (done, total, detail = "") => this.status(`获取 ${conference} ${year}：${done}${total == null ? "" : ` / ${total}`} 篇${detail ? ` · ${detail}` : ""}`)
         });
         metadata = { schemaVersion: 1, venueID, year,
           fetchedAt: new Date().toISOString(), paperCount: papers.length, papers };
@@ -114,7 +131,9 @@ var Search4PaperUI = {
     this.papers = metadata.papers;
     this.loadedYear = year;
     this.loadedConference = conference;
-    this.$("coverage").textContent = `${conference} ${year} · OpenReview 公开录用论文 ${this.papers.length} 篇 · 缺少摘要 ${this.papers.filter(p => !p.abstract.trim()).length} 篇 · ${local ? "本地名单" : "已保存到本地"} · 获取时间 ${new Date(metadata.fetchedAt).toLocaleString()}`;
+    const scope = conference === "ACL" ? (year < 2020 ? "主会第 1 卷" : "主会 Long Papers") : conference === "EMNLP" ? (year < 2020 ? "主会第 1 卷" : "主会 main 卷")
+      : conference === "AAAI" ? "Technical Tracks" : "主会论文";
+    this.$("coverage").textContent = `${conference} ${year} · ${source} · ${scope} ${this.papers.length} 篇 · 缺少摘要 ${this.papers.filter(p => !p.abstract.trim()).length} 篇 · ${local ? "本地名单" : "已保存到本地"} · 获取时间 ${new Date(metadata.fetchedAt).toLocaleString()}`;
     await this.filterPapers(signal, query);
   },
   async filterPapers(signal, query = this.readQuery()) {
@@ -190,7 +209,6 @@ var Search4PaperUI = {
     if (select.selectedIndex < 0) select.value = "";
   },
   async importPapers(signal) {
-    if (this.$("conference").value !== "ICML") throw new Error("NeurIPS 和 ICLR 当前仅支持检索与预览。");
     const papers = this.candidates.filter(p => this.selected.has(p.id));
     if (!papers.length) throw new Error("请先选择论文。");
     if (this.filtersDirty) throw new Error("检索条件已修改，请先应用筛选。");
@@ -219,10 +237,28 @@ var Search4PaperUI = {
     if (signal.aborted) summary += " 已取消后续处理。";
     this.status(summary, Boolean(failed));
   },
+  async downloadIEEE(signal) {
+    const items = this.Zotero.getActiveZoteroPane()?.getSelectedItems() || [];
+    const outcomes = await this.ieee.download(items, { signal, onProgress: result => {
+      this.$("ieee-status").textContent = this.ieee.status;
+      this.status(`IEEE ${result.index} / ${result.total}：${result.title} · ${result.phase === "waiting" ? "等待下载间隔" : result.phase === "downloading" ? "开始下载 " + result.startedAt : result.hasPDF ? "附件已取得" : result.error}`);
+    } });
+    this.lastIEEE = outcomes;
+    this.$("ieee-status").textContent = this.ieee.status;
+    this.status(`IEEE PDF：成功 ${outcomes.filter(r => r.hasPDF).length}，失败 ${outcomes.filter(r => !r.hasPDF).length}，未处理 ${items.length - outcomes.length}。文献条目已保留。\n`
+      + outcomes.map(r => `${r.title}：${r.reused ? "复用已有 PDF" : r.hasPDF ? "下载成功" : r.error}${r.startedAt ? `（请求开始 ${r.startedAt}）` : ""}`).join("\n"));
+  },
   init() {
+    this.$("ieee-status").textContent = this.ieee.status;
+    this.$("ieee-login").addEventListener("click", () => this.operation(async () => {
+      this.ieee.login();
+      this.$("ieee-status").textContent = this.ieee.status;
+    }));
+    this.$("ieee-download").addEventListener("click", () => this.operation(signal => this.downloadIEEE(signal)));
     for (const conference of Search4PaperCore.CONFERENCES) this.$("conference").add(new Option(conference, conference));
     for (const input of document.querySelectorAll(".query input, .query select, .filter input")) {
       input.addEventListener("input", () => {
+        this.updateQuerySummary();
         this.filtersDirty = true; this.controls();
         this.status("检索条件已修改，请应用筛选；更换会议或年份后请重新搜索。");
       });
@@ -246,6 +282,7 @@ var Search4PaperUI = {
     this.refreshCollections();
     const selected = this.Zotero.getActiveZoteroPane()?.getSelectedCollections() || [];
     if (selected.length === 1 && selected[0].libraryID === this.Zotero.Libraries.userLibraryID) this.$("collection").value = String(selected[0].id);
+    this.updateQuerySummary();
     this.controls();
   }
 };

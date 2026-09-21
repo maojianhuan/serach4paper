@@ -50,13 +50,15 @@ Windows 打包脚本已包含新目录和采集模块。**仓库现有 EXE 尚�
 
 #### 在 Zotero 10 内使用独立 XPI
 
-Zotero 插件位于 `zotero-plugin/`，支持选择 ICML / NeurIPS / ICLR 及年份，检索 OpenReview 公开录用论文、筛选研究方向、预览摘要与命中依据。现有 ICML 导入功能保留；新增会议目前仅支持检索与预览。用户只安装 XPI，无需 Python、外部程序或本地通信授权。
+Zotero 插件位于 `zotero-plugin/`，支持选择 ICML / NeurIPS / ICLR / AAAI / ACL / CVPR / ICCV / EMNLP / ECCV / CRYPTO / EUROCRYPT / ASIACRYPT 及年份，从 OpenReview 或对应官方论文库检索、筛选关键词、预览摘要与命中依据，并将选中的论文导入 Zotero 集合。用户只安装 XPI，无需 Python、外部程序或本地通信授权。
 
 下载 [search4paper-0.1.3.xpi](https://github.com/maojianhuan/serach4paper/releases/download/zotero-v0.1.3/search4paper-0.1.3.xpi)（[版本说明与源码标签](https://github.com/maojianhuan/serach4paper/releases/tag/zotero-v0.1.3)），在 Zotero **工具 → 插件 → 齿轮菜单 → 从文件安装插件** 中安装，再从工具菜单打开 search4paper。同一个 XPI 用于 Windows、Linux、macOS，无需按操作系统重新生成；当前适配 Zotero 10.0.x，Linux 已实测，Windows/macOS 尚未验收。
 
+当前源码将检索条件合并为单一关键词框，可选择全部满足（AND）或任意满足（OR），并修复 NeurIPS / ICLR 勾选后无法导入的问题，现新增 AAAI / ACL / CVPR / ICCV / EMNLP / ECCV / CRYPTO / EUROCRYPT / ASIACRYPT 支持，版本仍为 `0.1.3`。这轮修改正在通过本地 `dist/search4paper-0.1.3.xpi` 验收，尚未更新上面的 Release；确认可用后再更新正式安装包。同版本测试包安装后也需重启 Zotero。
+
 元数据按会议、年份保存到 Zotero 数据目录，支持重启后离线筛选；点击“刷新名单”获取最新数据。[安装、使用、源码构建及发布说明](zotero-plugin/README.md)。源码构建使用 Python 3 标准库运行 `python zotero-plugin/build.py`，产物在 `dist/`；使用插件不需要 Python。Git 跟踪源码、构建脚本和版本号，正式 XPI 由版本标签对应的 GitHub Release 分发，`dist/` 继续忽略。
 
-下述 `search4paper-ui.exe` 是独立 Windows 应用，不是 XPI 生成器；其 Python/PyInstaller 构建步骤不适用于 Zotero 插件。独立 XPI 只检索上述三种会议的 OpenReview 数据，Python/EXE 工具仍支持原有完整来源目录。
+下述 `search4paper-ui.exe` 是独立 Windows 应用，不是 XPI 生成器；其 Python/PyInstaller 构建步骤不适用于 Zotero 插件。独立 XPI 支持上述八个会议；各来源的年份范围和主会卷筛选规则见 [插件说明](zotero-plugin/README.md)。Python/EXE 工具仍支持原有完整来源目录。
 
 #### 直接运行 Windows EXE
 
@@ -359,13 +361,15 @@ Typical workflow:
 
 #### Standalone Zotero 10 XPI
 
-`zotero-plugin/` provides a conference selector (ICML / NeurIPS / ICLR), year selection, OpenReview accepted-paper retrieval, multi-field research-topic filtering, and abstract/evidence previews. Existing ICML import remains available; the added conferences currently support search and preview only. Users only install the XPI; Python, an external service and local API authorization are not required.
+`zotero-plugin/` provides a conference selector (ICML / NeurIPS / ICLR / AAAI / ACL / CVPR / ICCV / EMNLP / ECCV / CRYPTO / EUROCRYPT / ASIACRYPT), year selection, retrieval from OpenReview or official proceedings, keyword filtering, abstract/evidence previews, and import of selected papers into Zotero collections. Users only install the XPI; Python, an external service and local API authorization are not required.
 
 Download [search4paper-0.1.3.xpi](https://github.com/maojianhuan/serach4paper/releases/download/zotero-v0.1.3/search4paper-0.1.3.xpi) ([release notes and source tag](https://github.com/maojianhuan/serach4paper/releases/tag/zotero-v0.1.3)), install it through **Tools → Plugins → gear menu → Install Plugin From File**, then open search4paper from Tools. The same XPI is used on Windows, Linux and macOS without rebuilding for each OS. It currently targets Zotero 10.0.x; Linux has been tested, while Windows/macOS validation is pending.
 
+The current source uses one keyword input with an AND/OR selector and fixes the disabled import button for selected NeurIPS / ICLR papers, and adds AAAI / ACL / CVPR / ICCV / EMNLP / ECCV / CRYPTO / EUROCRYPT / ASIACRYPT, while keeping version `0.1.3`. These changes are being reviewed using the local `dist/search4paper-0.1.3.xpi`; the Release above has not been updated. The official package will be updated after user acceptance. Restart Zotero after installing a test build, including when replacing the same version.
+
 Metadata is saved by conference and year for offline filtering; use **刷新名单** to fetch an updated list. [Installation, source builds, releases and validation](zotero-plugin/README.md). Developers can build with Python 3's standard library using `python zotero-plugin/build.py`; plugin users do not need Python. Git tracks source, the build script and the version; tagged GitHub Releases distribute the XPI, and `dist/` stays ignored.
 
-The `search4paper-ui.exe` below is a separate Windows application, not an XPI builder. Its Python/PyInstaller build instructions do not apply to the Zotero plugin. The XPI searches only the three conferences above on OpenReview; the Python/EXE application retains its broader source coverage.
+The `search4paper-ui.exe` below is a separate Windows application, not an XPI builder. Its Python/PyInstaller build instructions do not apply to the Zotero plugin. The XPI supports the eight conferences above; see the [plugin documentation](zotero-plugin/README.md) for supported years and main-proceedings scope. The Python/EXE application retains its broader source coverage.
 
 #### Run the Windows executable
 

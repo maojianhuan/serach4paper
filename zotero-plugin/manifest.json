@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "name": "search4paper",
   "version": "0.1.3",
-  "description": "按会议、年份检索 ICML、NeurIPS、ICLR 的 OpenReview 论文并按研究方向筛选。",
+  "description": "按会议和年份检索 ICML、NeurIPS、ICLR、AAAI、ACL、CVPR、ICCV、EMNLP、ECCV、CRYPTO、EUROCRYPT、ASIACRYPT 论文，筛选关键词并导入 Zotero。",
   "applications": {
     "zotero": {
       "id": "search4paper@local",

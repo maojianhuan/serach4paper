@@ -8,15 +8,20 @@ header span, .hint { color: GrayText; }
 p { margin: 0; }
 label { display: flex; align-items: center; gap: 5px; }
 .query > label, .destination > label { align-items: stretch; flex-direction: column; gap: 4px; }
+.query { align-items: flex-end; }
+.filter { flex-wrap: wrap; }
+.query-summary { font-size: 12px; line-height: 1.6; padding: 7px 10px; border: 1px solid color-mix(in srgb, CanvasText 20%, Canvas); border-radius: 4px; overflow-wrap: anywhere; }
 .grow { flex: 1; min-width: 0; }
 input:not([type=checkbox]), select { width: 100%; min-width: 0; margin: 0; border: 1px solid color-mix(in srgb, CanvasText 28%, Canvas); border-radius: 5px; background-color: Field; color: FieldText; padding: 7px; font: inherit; }
 select { padding-inline-end: 32px; }
 #year { width: 90px; }
 #conference { width: 100px; }
+#operator { width: 165px; }
 button { color: ButtonText; background: ButtonFace; border: 1px solid color-mix(in srgb, CanvasText 25%, Canvas); border-radius: 5px; padding: 7px 10px; font: inherit; cursor: pointer; }
 button:hover:not(:disabled) { background: color-mix(in srgb, Highlight 12%, Canvas); }
 button:disabled { opacity: .48; cursor: default; }
 button.primary { background: #245fc0; color: white; border-color: #245fc0; }
+button.primary:hover:not(:disabled) { background: #1e50a3; }
 .query > button, .destination > button { align-self: flex-end; }
 .hint { font-size: 12px; line-height: 1.5; }
 .coverage { font-size: 12px; padding: 7px 10px; background: color-mix(in srgb, Highlight 9%, Canvas); border-radius: 4px; }

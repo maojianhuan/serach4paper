@@ -264,10 +264,10 @@ async function runSearch4PaperPDFSmoke({ expectedDataDir, pdfURL, fixturePath, r
     const win = [...Services.wm.getEnumerator(null)].find(w => w.location.href === 'chrome://search4paper/content/search.xhtml');
     const ui = win.Search4PaperUI;
     const paper = { id: 'search4paper-pdf-fixture-' + Date.now(), title: 'search4paper native PDF fixture',
-      authors: ['Test Author'], year: 2026, venueID: 'TEST FIXTURE', abstract: 'Not a real research paper.',
+      authors: ['Test Author'], year: 2026, venueID: 'ICML.cc/2026/Conference', abstract: 'Not a real research paper.',
       doi: '', url: 'https://example.org/search4paper-test', pdfURL, bibtex: '', evidence: [] };
     ui.candidates = [paper]; ui.selected = new Set([paper.id]); ui.page = 0;
-    ui.query = { terms: ['fixture'], context: [], fields: ['title'] }; ui.filtersDirty = false;
+    ui.query = { terms: ['fixture'], operator: 'AND', fields: ['title'] }; ui.filtersDirty = false;
     ui.render(); ui.preview(paper); ui.$('include-pdf').checked = true;
     ui.$('collection').value = ''; ui.$('new-collection').value = 'XPI PDF fixture';
     await ui.operation(signal => ui.importPapers(signal));
@@ -347,10 +347,16 @@ async function runSearch4PaperDropdownSmoke({ expectedDataDir, reportPath }) {
       }
       finally { select.removeEventListener('change', onChange); }
     };
-    for (const conference of ['NeurIPS', 'ICLR', 'ICML']) {
+    for (const conference of ['NeurIPS', 'ICLR', 'AAAI', 'ACL', 'CVPR', 'ICCV', 'EMNLP', 'ECCV', 'CRYPTO', 'EUROCRYPT', 'ASIACRYPT', 'ICML']) {
       ui.filtersDirty = false;
       await selectByMouse('conference', conference);
       assert(ui.filtersDirty, 'Conference selection must invalidate the previous search');
+    }
+    for (const operator of ['OR', 'AND']) {
+      ui.filtersDirty = false;
+      await selectByMouse('operator', operator);
+      assert(ui.filtersDirty, 'Changing keyword relation must invalidate the previous search');
+      assert(ui.$('query-expression').textContent.includes(` ${operator} `), 'Expression must show the selected keyword relation');
     }
     const parent = new Zotero.Collection();
     parent.name = 'search4paper dropdown fixture ' + Date.now();
@@ -364,18 +370,36 @@ async function runSearch4PaperDropdownSmoke({ expectedDataDir, reportPath }) {
     click(ui.$('refresh'));
     assert(ui.$('collection').value === String(child.id), 'Refreshing collections must keep the selected child');
 
-    const marker = 'DropdownFixture' + Date.now();
-    const paper = { id: marker, title: 'Dropdown regression fixture: time series anomaly detection', year: 2026,
-      venueID: 'ICML.cc/2026/Conference', authors: ['Test Author'], doi: '',
-      url: 'https://example.org/' + marker, abstract: 'Synthetic UI test fixture, not a real paper.', evidence: [] };
-    ui.query = { terms: ['anomaly detection'], context: ['time series'], fields: ['title'] };
-    ui.candidates = [paper]; ui.selected = new Set([paper.id]); ui.filtersDirty = false;
     ui.$('new-collection').value = ''; ui.$('include-pdf').checked = false;
-    ui.render(); ui.preview(paper);
-    click(ui.$('import'));
-    await waitFor(() => !ui.busy, 'Fixture import did not finish');
-    assert(ui.lastImport?.collectionID === child.id, ui.$('status').textContent);
-    assert(ui.lastImport.results.length === 1 && ui.lastImport.results[0].item?.inCollection(child.id), 'Fixture must be imported into the child selected through the popup');
+    report.imports = [];
+    for (const [conference, expectedTitle] of [
+      ['ICML', 'International Conference on Machine Learning (ICML 2026)'],
+      ['NeurIPS', 'Advances in Neural Information Processing Systems (NeurIPS 2026)'],
+      ['ICLR', 'International Conference on Learning Representations (ICLR 2026)']
+    ]) {
+      await selectByMouse('conference', conference);
+      const marker = 'DropdownFixture' + conference + Date.now();
+      const paper = { id: marker, title: `${conference} dropdown regression fixture: time series anomaly detection`, year: 2026,
+        venueID: `${conference}.cc/2026/Conference`, authors: ['Test Author'], doi: '',
+        url: 'https://example.org/' + marker, abstract: 'Synthetic UI test fixture, not a real paper.', evidence: [] };
+      ui.query = { terms: ['anomaly detection', 'time series'], operator: 'AND', fields: ['title'] };
+      ui.candidates = [paper]; ui.selected.clear(); ui.filtersDirty = false;
+      ui.render(); ui.preview(paper);
+      assert(ui.$('import').disabled, 'Previewing a paper does not select it for import');
+      const checkbox = ui.$('results').querySelector('input[type=checkbox]');
+      let trusted = false;
+      checkbox.addEventListener('change', event => { trusted = event.isTrusted; }, { once: true });
+      click(checkbox);
+      assert(trusted && ui.selected.has(marker) && !ui.$('import').disabled, `${conference}: checking a paper must enable import`);
+      click(ui.$('import'));
+      await waitFor(() => !ui.busy, 'Fixture import did not finish');
+      assert(ui.lastImport?.collectionID === child.id, ui.$('status').textContent);
+      assert(ui.lastImport.results.length === 1 && ui.lastImport.results[0].paper.id === marker, 'Import must use the selected paper');
+      const item = ui.lastImport.results[0].item;
+      assert(item?.inCollection(child.id), 'Fixture must be imported into the child selected through the popup');
+      assert(item.getField('proceedingsTitle') === expectedTitle, 'Bibliography must name the correct conference');
+      report.imports.push({ conference, itemID: item.id, proceedingsTitle: item.getField('proceedingsTitle') });
+    }
     report.importedInto = child.id;
     report.ok = true;
   }
@@ -394,9 +418,9 @@ async function runSearch4PaperImportFailureSmoke({ expectedDataDir, reportPath }
     const importer = win.Search4PaperImport;
     const libraryID = Zotero.Libraries.userLibraryID;
     const marker = 'search4paper-failure-fixture-' + Date.now();
-    const paper = { id: marker, title: 'Import failure fixture', year: 2026, venueID: 'TEST FIXTURE',
+    const paper = { id: marker, title: 'Import failure fixture', year: 2026, venueID: 'ICML.cc/2026/Conference',
       authors: ['Test Author'], doi: '', url: 'https://example.org/' + marker, abstract: '', evidence: [] };
-    const options = { name: marker, query: { terms: ['fixture'], context: [], fields: ['title'] } };
+    const options = { name: marker, query: { terms: ['fixture'], operator: 'AND', fields: ['title'] } };
     const before = (await Zotero.Items.getAll(libraryID)).length;
     const setNote = Zotero.Item.prototype.setNote;
     let failed;

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?xml-stylesheet href="chrome://global/skin/" type="text/css"?>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>Paper Search for Zotero</title>
+  <style>
+    :root { color-scheme: light dark; font: 14px system-ui, sans-serif; color: CanvasText; background: Canvas; }
+    body { margin: 24px; line-height: 1.6; }
+    h1 { font-size: 22px; margin: 0 0 16px; }
+    p { margin: 12px 0; }
+    footer { text-align: right; margin-top: 20px; }
+    button { font: inherit; padding: 7px 16px; border: 1px solid #245fc0; border-radius: 5px; background: #245fc0; color: white; cursor: pointer; }
+  </style>
+  <script src="welcome.js" defer="defer"></script>
+</head>
+<body>
+  <h1>Paper Search for Zotero</h1>
+  <p>直接在 Zotero 中检索近期会议论文。</p>
+  <p>目前支持：ICML、NeurIPS、ICLR、AAAI、ACL、CVPR、ICCV、EMNLP、ECCV、CRYPTO、EUROCRYPT、ASIACRYPT。</p>
+  <p>ICML、NeurIPS、ICLR 数据来自 OpenReview，可能早于 DBLP 等书目数据库收录近期录用论文；其他会议使用各自的官方论文来源。</p>
+  <p>按会议、年份和研究关键词检索，查看论文元数据与摘要，并将选中的论文导入 Zotero。</p>
+  <footer><button id="get-started" autofocus="autofocus">开始使用</button></footer>
+</body>
+</html>

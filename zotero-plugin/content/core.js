@@ -1,12 +1,37 @@
 /* Pure retrieval/matching logic; also exercised by Node's built-in test runner. */
 var Search4PaperCore = (() => {
   const FIELDS = ["title", "abstract", "keywords", "tldr"];
-  const CONFERENCES = ["ICML", "NeurIPS", "ICLR"];
+  const CONFERENCES = ["ICML", "NeurIPS", "ICLR", "AAAI", "ACL", "CVPR", "ICCV", "EMNLP", "ECCV", "CRYPTO", "EUROCRYPT", "ASIACRYPT"];
+  const OPENREVIEW_CONFERENCES = ["ICML", "NeurIPS", "ICLR"];
+  const CONFERENCE_NAMES = {
+    ICML: "International Conference on Machine Learning",
+    NeurIPS: "Advances in Neural Information Processing Systems",
+    ICLR: "International Conference on Learning Representations",
+    AAAI: "AAAI Conference on Artificial Intelligence",
+    ACL: "Annual Meeting of the Association for Computational Linguistics",
+    CVPR: "IEEE/CVF Conference on Computer Vision and Pattern Recognition",
+    ICCV: "IEEE/CVF International Conference on Computer Vision",
+    CRYPTO: "International Cryptology Conference",
+    EUROCRYPT: "International Conference on the Theory and Applications of Cryptographic Techniques",
+    ASIACRYPT: "International Conference on the Theory and Application of Cryptology and Information Security",
+    ECCV: "European Conference on Computer Vision",
+    EMNLP: "Conference on Empirical Methods in Natural Language Processing"
+  };
+  function sourceName(conference) {
+    if (OPENREVIEW_CONFERENCES.includes(conference)) return "OpenReview";
+    if (["CRYPTO", "EUROCRYPT", "ASIACRYPT"].includes(conference)) return "IACR CryptoDB";
+    if (conference === "ECCV") return "ECVA Open Access";
+    if (conference === "AAAI") return "AAAI Proceedings";
+    if (["ACL", "EMNLP"].includes(conference)) return "ACL Anthology";
+    if (["CVPR", "ICCV"].includes(conference)) return "CVF Open Access";
+    throw new Error("请选择受支持的会议。");
+  }
 
   function venueID(conference, year) {
-    if (!CONFERENCES.includes(conference)) throw new Error("请选择 ICML、NeurIPS 或 ICLR。");
+    if (!CONFERENCES.includes(conference)) throw new Error("请选择受支持的会议。");
     validateYear(year);
-    return `${conference}.cc/${year}/Conference`;
+    return OPENREVIEW_CONFERENCES.includes(conference)
+      ? `${conference}.cc/${year}/Conference` : `${conference}/${year}/Conference`;
   }
   const value = (content, key) => {
     const field = content[key];
@@ -36,13 +61,13 @@ var Search4PaperCore = (() => {
 
   function validateQuery(query) {
     if (!query.terms.length || query.terms.some(term => !words(term).length)) {
-      throw new Error("请输入英文主题词组；多个词组用分号分隔。");
+      throw new Error("请输入至少一个英文关键词；多个关键词用分号分隔。");
     }
     if (!query.fields.length || query.fields.some(field => !FIELDS.includes(field))) {
-      throw new Error("请至少选择一个搜索字段。");
+      throw new Error("请至少勾选一个查找位置。");
     }
-    if (query.context.some(term => !words(term).length)) {
-      throw new Error("上下文词组必须包含英文字母或数字。");
+    if (!["AND", "OR"].includes(query.operator)) {
+      throw new Error("请选择“全部满足（AND）”或“任意满足（OR）”。");
     }
   }
 
@@ -57,17 +82,19 @@ var Search4PaperCore = (() => {
   }
 
   function matchPaper(paper, query) {
-    const combined = query.fields.map(field => paper[field] || "").join(" ");
-    if (query.context.length && !query.context.some(term => phraseMatches(combined, term))) return null;
     const evidence = [];
+    const matchedTerms = new Set();
     for (const field of query.fields) {
       for (const term of query.terms) {
         if (phraseMatches(paper[field] || "", term)) {
+          matchedTerms.add(term);
           evidence.push({ field, term, text: snippet(paper[field], term) });
         }
       }
     }
-    return evidence.length ? { ...paper, evidence } : null;
+    if (!evidence.length) return null;
+    if (query.operator === "AND" && !query.terms.every(term => matchedTerms.has(term))) return null;
+    return { ...paper, evidence };
   }
 
   function normalizeNote(note, year, conference = "ICML") {
@@ -120,9 +147,20 @@ var Search4PaperCore = (() => {
         || !Array.isArray(paper.authors) || paper.authors.some(author => typeof author !== "string")) {
         throw new Error("本地元数据包含格式异常或会议、年份不一致的论文。");
       }
-      if (ids.has(paper.id)) throw new Error("本地元数据包含重复的 OpenReview ID。");
+      if (ids.has(paper.id)) throw new Error("本地元数据包含重复的论文 ID。");
       ids.add(paper.id);
-      if (paper.url !== `https://openreview.net/forum?id=${encodeURIComponent(paper.id)}`
+      const source = OPENREVIEW_CONFERENCES.includes(conference) ? "openreview"
+        : conference === "AAAI" ? "aaai" : ["ACL", "EMNLP"].includes(conference) ? "acl" : conference === "ECCV" ? "ecva" : ["CRYPTO", "EUROCRYPT", "ASIACRYPT"].includes(conference) ? "iacr" : "cvf";
+      const sourceURL = source === "openreview" ? `https://openreview.net/forum?id=${encodeURIComponent(paper.id)}`
+        : source === "aaai" ? `https://ojs.aaai.org/index.php/AAAI/article/view/${paper.id}`
+        : source === "iacr" ? `https://www.iacr.org/cryptodb/data/paper.php?pubkey=${paper.id}`
+        : source === "acl" ? `https://aclanthology.org/${paper.id}/` : source === "ecva" ? `https://www.ecva.net${paper.id}` : `https://openaccess.thecvf.com${paper.id}`;
+      if ((source !== "openreview" && paper.source !== source)
+        || (paper.source !== undefined && paper.source !== source) || paper.url !== sourceURL
+        || (["aaai", "iacr"].includes(source) && !/^\d+$/.test(paper.id))
+        || (source === "acl" && !(year < 2020 ? new RegExp(`^${conference === "ACL" ? "P" : "D"}${String(year).slice(-2)}-1\\d{3}$`).test(paper.id) : paper.id.startsWith(`${year}.${conference.toLowerCase()}-`)))
+        || (source === "cvf" && !new RegExp(`^/(?:content/${conference}${year}|content_${conference.toLowerCase()}_${year}|content_${conference}_${year})/html/[^/]+_paper\\.html$`).test(paper.id))
+        || (source === "ecva" && !new RegExp(`^/papers/eccv_${year}/papers_ECCV/html/[^/]+_paper\\.php$`).test(paper.id))
         || (paper.pdfURL && (!URL.canParse(paper.pdfURL) || !["http:", "https:"].includes(new URL(paper.pdfURL).protocol)))) {
         throw new Error("本地元数据包含无效的论文链接。");
       }
@@ -132,6 +170,7 @@ var Search4PaperCore = (() => {
 
   async function fetchAccepted(year, { conference = "ICML", request, signal, onProgress = () => {} }) {
     const venue = venueID(conference, year);
+    if (!OPENREVIEW_CONFERENCES.includes(conference)) throw new Error("此会议需使用对应的官方论文库。");
     const papers = [], ids = new Set();
     let count;
     do {
@@ -167,17 +206,28 @@ var Search4PaperCore = (() => {
       if (doi) keys.add("doi:" + doi);
     };
     addDOI(data.doi);
-    if (data.id) keys.add("openreview:" + data.id);
+    if (data.id) keys.add(data.source && data.source !== "openreview"
+      ? `source:${data.source}:${data.id}` : "openreview:" + data.id);
     if (data.url && URL.canParse(data.url)) {
       const url = new URL(data.url);
       if (["openreview.net", "www.openreview.net"].includes(url.hostname) && ["/forum", "/pdf"].includes(url.pathname)) {
         const id = url.searchParams.get("id");
         if (id) keys.add("openreview:" + id);
       }
+      const aaai = url.hostname === "ojs.aaai.org" && url.pathname.match(/^\/index\.php\/AAAI\/article\/(?:view|download)\/(\d+)(?:\/\d+)?\/?$/);
+      const acl = url.hostname === "aclanthology.org" && url.pathname.match(/^\/(\d{4}\.(?:acl|emnlp)-(?:long|main)\.\d+|[PD]\d{2}-1\d{3})(?:\.pdf|\/)?$/);
+      const cvf = url.hostname === "openaccess.thecvf.com" && url.pathname.match(/^\/(?:content\/(?:CVPR|ICCV)\d{4}|content_(?:cvpr|iccv)_\d{4}|content_(?:CVPR|ICCV)_\d{4})\/(?:html|papers)\/[^/]+\.(?:html|pdf)$/);
+      if (["www.ecva.net", "ecva.net"].includes(url.hostname) && /^\/papers\/eccv_\d{4}\/papers_ECCV\/html\/[^/]+_paper\.php$/.test(url.pathname)) keys.add(`source:ecva:${url.pathname}`);
+      if (["www.iacr.org", "iacr.org"].includes(url.hostname) && url.pathname === "/cryptodb/data/paper.php"
+        && /^\d+$/.test(url.searchParams.get("pubkey"))) keys.add(`source:iacr:${url.searchParams.get("pubkey")}`);
+      if (aaai) keys.add(`source:aaai:${aaai[1]}`);
+      if (acl) keys.add(`source:acl:${acl[1]}`);
+      if (cvf) keys.add(`source:cvf:${url.pathname.replace("/papers/", "/html/").replace(/\.pdf$/, ".html")}`);
     }
     for (const line of (data.extra || "").split("\n")) {
       if (line.startsWith("OpenReview ID: ")) keys.add("openreview:" + line.slice(15).trim());
       if (line.startsWith("DOI: ")) addDOI(line.slice(5));
+      if (/^Source ID: (aaai|acl|cvf|ecva|iacr):/.test(line)) keys.add("source:" + line.slice(11).trim());
     }
     return keys;
   }
@@ -187,14 +237,14 @@ var Search4PaperCore = (() => {
 
   function evidenceNote(paper, query) {
     const lines = ["Imported by search4paper", `Source: ${paper.url}`, `Venue: ${paper.venueID}`,
-      `Topic: ${query.terms.join("; ")}`, `Context: ${query.context.join("; ")}`,
+      `Keywords: ${query.terms.join("; ")}`, `Match: ${query.operator}`,
       `Fields: ${query.fields.join(", ")}`,
       ...(paper.evidence || []).map(hit => `[${hit.field}] ${hit.term}: ${hit.text}`)];
     if (paper.bibtex) lines.push("Source BibTeX:", paper.bibtex);
     return lines.map(line => `<p>${escapeHTML(line)}</p>`).join("");
   }
 
-  return { FIELDS, CONFERENCES, venueID, words, phraseMatches, splitTerms, validateQuery, matchPaper, normalizeNote,
+  return { FIELDS, CONFERENCES, OPENREVIEW_CONFERENCES, CONFERENCE_NAMES, sourceName, venueID, words, phraseMatches, splitTerms, validateQuery, matchPaper, normalizeNote,
     validateYear, validateMetadata, fetchAccepted, identities, evidenceNote };
 })();
 if (typeof module !== "undefined") module.exports = Search4PaperCore;

@@ -42,21 +42,25 @@ var Search4PaperImport = {
         if (!paper.title || !keys.size) throw new Error("论文缺少标题或来源标识。");
         const matches = new Map();
         for (const key of keys) for (const [id, item] of index.get(key) || []) matches.set(id, item);
-        if (matches.size > 1) throw new Error("文献库中有多个相同 DOI/OpenReview ID 的条目，请先处理重复项。");
+        if (matches.size > 1) throw new Error("文献库中有多个相同 DOI/来源 ID 的条目，请先处理重复项。");
         const created = !matches.size;
         const item = created ? new Zotero.Item("conferencePaper") : [...matches.values()][0];
         await Zotero.DB.executeTransaction(async () => {
           if (collection && !collection.id) await collection.save();
           if (created) {
+            const conference = Search4PaperCore.CONFERENCES.find(name => Search4PaperCore.venueID(name, paper.year) === paper.venueID);
+            const conferenceName = Search4PaperCore.CONFERENCE_NAMES[conference];
+            if (!conferenceName) throw new Error(`不支持导入此会议：${paper.venueID}`);
             item.libraryID = libraryID;
             item.setField("title", paper.title);
             item.setField("abstractNote", paper.abstract);
             item.setField("date", String(paper.year));
             item.setField("url", paper.url);
             item.setField("DOI", paper.doi);
-            item.setField("proceedingsTitle", `International Conference on Machine Learning (ICML ${paper.year})`);
-            item.setField("extra", `OpenReview ID: ${paper.id}`);
-            // OpenReview provides unsplit names. Preserve them without guessing surnames.
+            item.setField("proceedingsTitle", `${conferenceName} (${conference} ${paper.year})`);
+            item.setField("extra", paper.source && paper.source !== "openreview"
+              ? `Source ID: ${paper.source}:${paper.id}` : `OpenReview ID: ${paper.id}`);
+            // Preserve source author names without guessing surnames.
             item.setCreators(paper.authors.map(name => ({ lastName: name, fieldMode: 1, creatorType: "author" })));
           }
           if (collection) item.addToCollection(collection.id);
@@ -90,15 +94,27 @@ var Search4PaperImport = {
       let error = "";
       try {
         if (Zotero.Attachments.canFindFileForItem(item)) {
-          const resolvers = paper.pdfURL ? [{ url: paper.pdfURL, pageURL: paper.url }]
-            : Zotero.Attachments.getFileResolvers(item);
-          await Zotero.Attachments.addFileFromURLs(item, resolvers, {
-            onBeforeRequest() { signal?.throwIfAborted(); },
-            onRequestError(exception) {
-              error = `${exception.status ? `HTTP ${exception.status}: ` : ""}${exception.message || exception}`;
-              return false;
+          const failures = [];
+          for (const direct of (paper.pdfURL ? [true, false] : [false])) {
+            signal?.throwIfAborted();
+            let attemptError = "", attachment;
+            const stage = direct ? "直接下载" : "Zotero 原生全文查找";
+            try {
+              const resolvers = direct ? [{ url: paper.pdfURL }]
+                : Zotero.Attachments.getFileResolvers(item);
+              attachment = await Zotero.Attachments.addFileFromURLs(item, resolvers, {
+                onBeforeRequest() { signal?.throwIfAborted(); },
+                onRequestError(exception) {
+                  attemptError = `${exception.status ? `HTTP ${exception.status}: ` : ""}${exception.message || exception}`;
+                  return false;
+                }
+              });
             }
-          });
+            catch (exception) { attemptError = exception.message || String(exception); }
+            if (attachment) break;
+            failures.push(`${stage}：${attemptError || "未找到可用全文"}`);
+            error = failures.join("；");
+          }
         }
       }
       catch (exception) { error = exception.message; }

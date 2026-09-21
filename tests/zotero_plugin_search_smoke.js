@@ -23,7 +23,7 @@ async function runSearch4PaperConferenceSmoke({ expectedDataDir, reportPath,
       return win?.Search4PaperUI && win.document.readyState === 'complete';
     });
     ui = win.Search4PaperUI; request = ui.request;
-    assert(JSON.stringify([...ui.$('conference').options].map(o => o.value)) === JSON.stringify(['ICML', 'NeurIPS', 'ICLR']), 'Conference selector must contain exactly the three requested choices');
+    assert(JSON.stringify([...ui.$('conference').options].map(o => o.value)) === JSON.stringify(win.Search4PaperCore.CONFERENCES), 'Conference selector must contain the supported choices');
     const change = (id, value) => {
       ui.$(id).value = value;
       ui.$(id).dispatchEvent(new win.Event('input', { bubbles: true }));
@@ -31,7 +31,7 @@ async function runSearch4PaperConferenceSmoke({ expectedDataDir, reportPath,
     const click = async id => { ui.$(id).click(); await waitFor(() => !ui.busy); };
     const unavailableNetwork = async () => { throw new Error('Search must use saved metadata without network access'); };
     change('conference', 'ICML'); change('year', '2026');
-    change('terms', 'anomaly detection'); change('context', 'time series');
+    change('terms', 'anomaly detection; time series'); change('operator', 'AND');
     for (const field of win.Search4PaperCore.FIELDS) ui.$('field-' + field).checked = true;
     const oldPath = PathUtils.join(expectedDataDir, 'search4paper', 'ICML', '2026.json');
     if (await IOUtils.exists(oldPath)) {
@@ -66,7 +66,7 @@ async function runSearch4PaperConferenceSmoke({ expectedDataDir, reportPath,
       assert(ui.$('abstract').textContent === ui.candidates[0].abstract && ui.$('evidence').children.length > 0, 'Abstract and matching evidence must remain visible');
       const ids = ui.candidates.map(p => p.id);
       ui.$('select-page').click();
-      if (conference !== 'ICML') assert(ui.$('import').disabled, 'New venues are search-only');
+      assert(!ui.$('import').disabled, 'Selected papers from every supported venue must enable import');
       const path = PathUtils.join(expectedDataDir, 'search4paper', conference, `${year}.json`);
       const saved = win.Search4PaperCore.validateMetadata(await IOUtils.readJSON(path), year, conference);
       ui.request = unavailableNetwork;

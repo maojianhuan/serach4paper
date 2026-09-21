@@ -3,32 +3,37 @@
 <html xmlns="http://www.w3.org/1999/xhtml" lang="zh-CN">
 <head>
   <meta charset="utf-8" />
-  <title>search4paper · OpenReview 论文检索</title>
+  <title>search4paper · 会议论文检索</title>
   <link rel="stylesheet" href="search.css" />
   <script src="core.js"></script>
+  <script src="sources.js"></script>
   <script src="import.js"></script>
   <script src="search.js" defer="defer"></script>
 </head>
 <body>
-  <header><h1>OpenReview 论文检索</h1><span>search4paper</span></header>
+  <header><h1>会议论文检索</h1><span>search4paper</span></header>
   <section class="query" aria-label="论文检索条件">
     <label>会议 <select id="conference"></select></label>
     <label>会议年份 <input id="year" type="number" min="2000" max="2100" value="2026" /></label>
-    <label class="grow">研究方向词组 <input id="terms" value="anomaly detection" placeholder="anomaly detection; outlier detection" /></label>
-    <label class="grow">上下文词组 <input id="context" value="time series" placeholder="time series; temporal" /></label>
+    <label class="grow">关键词 <input id="terms" value="anomaly detection; time series" placeholder="例如：anomaly detection; time series" aria-describedby="phrase-rule" /></label>
+    <label>关键词关系 <select id="operator"><option value="AND">全部满足（AND）</option><option value="OR">任意满足（OR）</option></select></label>
     <button id="fetch" class="primary" title="优先读取所选会议、年份的本地名单；没有本地数据时联网获取并保存">搜索论文</button>
   </section>
-  <section class="filter" aria-label="研究方向筛选">
-    <span>搜索范围</span>
+  <p id="phrase-rule" class="hint">用分号 ; 分隔关键词，再选择全部满足（AND）或任意满足（OR）。空格连接同一个词组，如 time series；支持英文词形和连字符变化。</p>
+  <section class="filter" aria-label="查找位置与筛选操作" aria-describedby="field-rule">
+    <span>查找位置（可多选）</span>
     <label><input id="field-title" type="checkbox" checked="checked" />标题</label>
     <label><input id="field-abstract" type="checkbox" checked="checked" />摘要</label>
     <label><input id="field-keywords" type="checkbox" checked="checked" />关键词</label>
     <label><input id="field-tldr" type="checkbox" checked="checked" />TLDR</label>
     <button id="filter" disabled="disabled">应用筛选</button>
-    <button id="refresh-papers" title="重新从 OpenReview 获取所选会议、年份的完整名单，成功后替换本地数据">刷新名单</button>
+    <button id="refresh-papers" title="重新从官方论文来源获取所选会议、年份的完整名单，成功后替换本地数据">刷新名单</button>
     <button id="cancel" disabled="disabled">取消操作</button>
   </section>
-  <p class="hint">分号分隔的词组匹配任意一个；上下文不为空时还须匹配至少一个上下文词组。支持英文词形和连字符变化。</p>
+  <div class="query-summary" aria-label="当前匹配规则">
+    <p><strong>当前条件：</strong><span id="query-expression"></span></p>
+    <p id="field-rule"></p>
+  </div>
   <p id="coverage" class="coverage">优先读取本地录用名单；首次检索联网获取并保存。需要更新时点击“刷新名单”。</p>
   <div class="workspace">
     <section class="candidates" aria-label="候选论文">
@@ -40,7 +45,7 @@
     </section>
     <section class="preview" aria-label="论文预览">
       <h2 id="paper-title">论文预览</h2><p id="authors" class="hint"></p>
-      <p><button id="source" disabled="disabled">打开 OpenReview</button> <button id="pdf-link" disabled="disabled">打开 PDF 链接</button></p>
+      <p><button id="source" disabled="disabled">打开论文来源</button> <button id="pdf-link" disabled="disabled">打开 PDF 链接</button></p>
       <h3>摘要</h3><p id="abstract">选择一篇候选论文。</p>
       <h3>命中依据</h3><ul id="evidence"></ul>
     </section>
@@ -53,6 +58,13 @@
   </section>
   <footer><label><input id="include-pdf" type="checkbox" checked="checked" />导入后让 Zotero 获取 PDF</label>
     <button id="import" class="primary" disabled="disabled">导入选中论文</button></footer>
+  <details id="ieee-access">
+    <summary>IEEE Xplore · 北航机构访问</summary>
+    <div class="toolbar"><button id="ieee-login">IEEE 北航机构登录</button>
+      <button id="ieee-download">为 Zotero 中选中的条目下载 IEEE PDF</button></div>
+    <p class="hint">先在登录窗口手动选择 Beihang University 并完成 SSO。再在 Zotero 主窗口选中文献（URL 栏须为 IEEE 论文或 PDF 链接）。按所选条目顺序逐篇下载，开始时间至少间隔 10 秒；已有 PDF 会复用。</p>
+    <p id="ieee-status" class="hint" role="status"></p>
+  </details>
   <p id="status" role="status" aria-live="polite">就绪</p>
 </body>
 </html>
