@@ -707,3 +707,18 @@ test('fulltext uses ACM public download first and exposes verification only afte
   if(native)assert.match(ui.lastPDFs[0].error,/ACM HTTP 404；native unavailable/);
  }
 });
+
+test('known FSE/OA PDF is tried before ACM access and a successful download stops further requests',async()=>{
+ const item={id:1,libraryID:1,isRegularItem:()=>true,getField:f=>({title:'FSE paper',DOI:'10.1145/3715733',url:'https://doi.org/10.1145/3715733'})[f]||''};
+ for(const directSuccess of [true,false]){
+  const calls=[];
+  const ui=workflowUI({getActiveZoteroPane:()=>({getSelectedItems:()=>[item]}),Libraries:{get:()=>({filesEditable:true})}},
+   {findPDFs:async(Z,results)=>{calls.push(['direct',results[0].paper.pdfURL]);return [{title:'FSE paper',hasPDF:directSuccess,error:directSuccess?'':'direct failed'}];}});
+  ui.acm={canHandle:()=>true,status:'ACM',verificationURL:'',download:async()=>{calls.push(['acm']);return {title:'FSE paper',hasPDF:false,verificationRequired:true,error:'ACM 403'};}};
+  ui.lastImport={results:[{item,paper:{title:'FSE paper',pdfURL:'https://arxiv.org/pdf/2502.01937'}}]};
+  ui.switchPage('fulltext');await ui.getFullText(new AbortController().signal);
+  assert.deepEqual(calls,directSuccess?[['direct','https://arxiv.org/pdf/2502.01937']]:[['direct','https://arxiv.org/pdf/2502.01937'],['acm']]);
+  assert.equal(ui.lastPDFs[0].hasPDF,directSuccess);
+  if(!directSuccess)assert.match(ui.lastPDFs[0].error,/direct failed；ACM 403/);
+ }
+});

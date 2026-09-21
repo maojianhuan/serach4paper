@@ -280,15 +280,21 @@ var Search4PaperUI = {
         // Use the existing institutional path only after the user explicitly starts login.
         let institutional = this.ieee.context && this.ieee.hasPaperURL(item.getField("url"));
         let result;
-        if (this.acm.canHandle(item)) {
+        const paper = this.lastImport?.results.find(r => r.item?.id === item.id)?.paper || { title };
+        const acm = this.acm.canHandle(item);
+        // Preserve the existing official/OA link path before publisher-specific access.
+        const triedDirect = acm && Boolean(paper.pdfURL);
+        if (triedDirect) [result] = await Search4PaperImport.findPDFs(this.Zotero, [{ item, paper }], { signal });
+        if (acm && !result?.hasPDF && !signal.aborted) {
+          const directError = result?.error;
           result = await this.acm.download(item, { signal });
+          if (!result.hasPDF && directError) result.error = `${directError}；${result.error}`;
           this.updateACMStatus();
         }
         const acmError = result?.error;
         const icde = /^Source ID: icde:/m.test(item.getField("extra"));
-        if (!result?.hasPDF && !result?.verificationRequired && !signal.aborted && (!institutional || icde)) {
+        if (!triedDirect && !result?.hasPDF && !result?.verificationRequired && !signal.aborted && (!institutional || icde)) {
           // ICDE is not assumed paywalled: try the existing direct/Zotero path first.
-          const paper = this.lastImport?.results.find(r => r.item?.id === item.id)?.paper || { title };
           [result] = await Search4PaperImport.findPDFs(this.Zotero, [{ item, paper }], { signal });
           if (acmError && result && !result.hasPDF) result.error = [acmError, result.error].filter(Boolean).join("；");
         }

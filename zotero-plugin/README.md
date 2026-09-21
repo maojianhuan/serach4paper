@@ -11,7 +11,7 @@
 - **论文检索**：选择会议、年份，输入关键词；分号分隔词组，AND 全部满足，OR 任一满足。勾选的查找字段取并集。点击标题预览，勾选论文后导入目标集合，可新建子集合并添加标签。
 - **全文获取**：先在 Zotero 主窗口选中文献，再点击获取全文。IEEE 北航订阅访问需在插件窗口手动完成 SSO；同一会话复用 Cookie，机构下载逐篇进行，开始时间至少间隔 10 秒。全文不保证可得；失败时保留书目条目，已知限制见 [TODO](../TODO.md)。
 
-ACM 条目优先按 DOI 请求官方公开 PDF；遇到 403 时显示“ACM 访问验证”，在 Zotero 窗口中手动完成验证后，再点击“获取全文”。验证窗口与请求共享独立的临时 Cookie 会话，不保存登录信息。网站验证仍可能阻止后台下载，需在 Windows 上实测。
+ACM 条目优先使用元数据中已有的公开 PDF 链接，否则按 DOI 请求 ACM 官方 PDF；遇到 403 时显示“ACM 访问验证”，在 Zotero 窗口中手动完成验证后，再点击“获取全文”。验证窗口与请求共享独立的临时 Cookie 会话，不保存登录信息。网站验证仍可能阻止后台下载，需在 Windows 上实测。
 
 元数据保存在 `<Zotero 数据目录>/search4paper/<会议>/<年份>.json`，支持离线筛选。点击“刷新名单”更新；失败或取消不会覆盖旧名单。缺失的摘要等字段保持为空。首次欢迎提示仅显示一次，状态保存在 Zotero profile 的 `extensions.search4paper.welcomeShown` 偏好中。
 
@@ -62,3 +62,6 @@ Windows 可用 `py -3 zotero-plugin/build.py`。Python 3 标准库仅用于打�
 Git 跟踪源码、构建脚本和版本号；XPI 存放在 Release，不提交到 Git。推送带注释的 `zotero-v<版本>` 标签会运行[发布工作流](../.github/workflows/release-zotero.yml)，从标签源码测试、打包，创建或更新同名 Release 和安装包。此轮按用户要求更新已有 0.1.3；后续通常使用新版本号。更新清单当前为空，用户手动下载安装。
 
 离线测试使用保存的页面片段；`tests/zotero_systems_fixtures.js` 在 Zotero 原生 DOMParser 中运行。联网验证与普通测试分开：2025 年 FAST 36、NSDI 83、OSDI 53、Security 438、CCS 316、NDSS 211、SIGCOMM 74、FSE 135 篇。USENIX 610 篇均保留摘要和官方 PDF 地址。Linux Zotero 10.0.3 用于缓存、预览和导入验证；本轮未验证 Windows/macOS GUI 或订阅 PDF 下载。
+
+
+联网 PDF 审计入口为 `tests/zotero_pdf_live_smoke.js`，不纳入普通单元测试。在安装当前 XPI 的全新 Zotero 测试 profile 中运行，保持个人文献库为空，不配置账号或登录；可仅复制由插件正常生成的 `search4paper/<会议>/<年份>.json` 缓存。通过 Run JavaScript 加载此脚本，调用 `runSearch4PaperPDFLiveSmoke({expectedDataDir: Zotero.DataDirectory.dir, reportPath: "测试结果 JSON 的绝对路径"})`。脚本清空测试 profile 的 Cookie 和 HTTP 缓存，按实际注册表逐会选择一篇论文，调用现有全文入口并检查附件 `%PDF-`，随后删除测试条目及附件；日志只保留会议、年份、论文、来源、HTTP 状态和结果。`only` 可用于针对失败会议复测；修复后应省略它完整重跑。每轮需重启 Zotero，禁止在真实个人 profile 中运行。
