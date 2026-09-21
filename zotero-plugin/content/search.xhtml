@@ -3,15 +3,28 @@
 <html xmlns="http://www.w3.org/1999/xhtml" lang="zh-CN">
 <head>
   <meta charset="utf-8" />
-  <title>search4paper · 会议论文检索</title>
+  <title>search4paper · 论文检索与全文获取</title>
   <link rel="stylesheet" href="search.css" />
   <script src="core.js"></script>
+  <script src="systems-sources.js" type="application/javascript"></script>
+  <script src="database-sources.js"></script>
   <script src="sources.js"></script>
   <script src="import.js"></script>
   <script src="search.js" defer="defer"></script>
 </head>
 <body>
-  <header><h1>会议论文检索</h1><span>search4paper</span></header>
+  <header><h1 id="page-title">论文检索</h1><span>search4paper</span></header>
+  <nav class="toolbar" role="tablist" aria-label="工作流程">
+    <button id="tab-search" role="tab" aria-controls="page-search" aria-selected="true">论文检索</button>
+    <button id="tab-fulltext" role="tab" aria-controls="page-fulltext" aria-selected="false" tabindex="-1">全文获取</button>
+  </nav>
+  <section id="page-search" class="workflow-page" role="tabpanel" aria-labelledby="tab-search">
+  <section class="venue-filters filter" aria-label="会议目录筛选">
+    <label>专业领域 <select id="venue-field"><option value="">全部领域</option></select></label>
+    <label>类型 <select id="venue-type"><option value="">全部类型</option><option value="会议">会议</option><option value="期刊">期刊</option></select></label>
+    <label>CCF 分类 <select id="venue-rank"><option value="">全部等级</option><option value="A">A</option><option value="B">B</option><option value="C">C</option></select></label>
+  </section>
+  <p id="venue-summary" class="hint" role="status"></p>
   <section class="query" aria-label="论文检索条件">
     <label>会议 <select id="conference"></select></label>
     <label>会议年份 <input id="year" type="number" min="2000" max="2100" value="2026" /></label>
@@ -19,7 +32,7 @@
     <label>关键词关系 <select id="operator"><option value="AND">全部满足（AND）</option><option value="OR">任意满足（OR）</option></select></label>
     <button id="fetch" class="primary" title="优先读取所选会议、年份的本地名单；没有本地数据时联网获取并保存">搜索论文</button>
   </section>
-  <p id="phrase-rule" class="hint">用分号 ; 分隔关键词，再选择全部满足（AND）或任意满足（OR）。空格连接同一个词组，如 time series；支持英文词形和连字符变化。</p>
+  <p id="phrase-rule" class="hint">分号分隔关键词；空格保留词组。AND 全部满足，OR 任一满足。</p>
   <section class="filter" aria-label="查找位置与筛选操作" aria-describedby="field-rule">
     <span>查找位置（可多选）</span>
     <label><input id="field-title" type="checkbox" checked="checked" />标题</label>
@@ -40,12 +53,12 @@
       <div class="toolbar"><strong id="count">候选论文 0 篇</strong><span id="selection">已选 0 篇</span>
         <button id="select-page" disabled="disabled">选中本页</button><button id="clear" disabled="disabled">清空选择</button></div>
       <div class="table-scroll"><table><thead><tr><th scope="col">选择</th><th scope="col">论文标题 / 命中字段</th></tr></thead><tbody id="results"></tbody></table>
-        <p id="empty">检索后在这里预览候选论文；点击标题查看摘要与命中依据。</p></div>
+        <p id="empty">点击标题预览，勾选后导入。</p></div>
       <div class="pagination"><button id="previous" disabled="disabled">上一页</button><span id="page">0 / 0</span><button id="next" disabled="disabled">下一页</button></div>
     </section>
     <section class="preview" aria-label="论文预览">
       <h2 id="paper-title">论文预览</h2><p id="authors" class="hint"></p>
-      <p><button id="source" disabled="disabled">打开论文来源</button> <button id="pdf-link" disabled="disabled">打开 PDF 链接</button></p>
+      <p><button id="source" disabled="disabled">打开论文来源</button></p>
       <h3>摘要</h3><p id="abstract">选择一篇候选论文。</p>
       <h3>命中依据</h3><ul id="evidence"></ul>
     </section>
@@ -56,15 +69,21 @@
     <label class="grow">新建子集合（可留空）<input id="new-collection" placeholder="留空则使用所选位置" /></label>
     <label class="grow">标签（分号分隔）<input id="tags" placeholder="time series; anomaly detection" /></label>
   </section>
-  <footer><label><input id="include-pdf" type="checkbox" checked="checked" />导入后让 Zotero 获取 PDF</label>
-    <button id="import" class="primary" disabled="disabled">导入选中论文</button></footer>
-  <details id="ieee-access">
-    <summary>IEEE Xplore · 北航机构访问</summary>
-    <div class="toolbar"><button id="ieee-login">IEEE 北航机构登录</button>
-      <button id="ieee-download">为 Zotero 中选中的条目下载 IEEE PDF</button></div>
-    <p class="hint">先在登录窗口手动选择 Beihang University 并完成 SSO。再在 Zotero 主窗口选中文献（URL 栏须为 IEEE 论文或 PDF 链接）。按所选条目顺序逐篇下载，开始时间至少间隔 10 秒；已有 PDF 会复用。</p>
-    <p id="ieee-status" class="hint" role="status"></p>
-  </details>
-  <p id="status" role="status" aria-live="polite">就绪</p>
+  <footer><button id="import" class="primary" disabled="disabled">导入选中论文</button></footer>
+  <p id="status" class="operation-status" role="status" aria-live="polite">就绪</p>
+  </section>
+  <section id="page-fulltext" class="workflow-page" role="tabpanel" aria-labelledby="tab-fulltext" hidden="hidden">
+    <p>在 Zotero 主窗口选中文献，再点击“获取全文”。</p>
+    <div class="toolbar"><button id="get-fulltext" class="primary">获取全文</button>
+      <button id="fulltext-cancel" disabled="disabled">取消操作</button></div>
+    <p class="hint">PDF 加入原条目；未找到全文时保留条目。</p>
+    <details id="ieee-access">
+      <summary>IEEE Xplore · 北航机构访问</summary>
+      <div class="toolbar"><button id="ieee-login">IEEE 北航机构登录</button></div>
+      <p class="hint">需要 IEEE 订阅访问时，选择 Beihang University 完成登录后重试。机构下载逐篇进行，至少间隔 10 秒。</p>
+      <p id="ieee-status" class="hint" role="status"></p>
+    </details>
+    <p id="fulltext-status" class="operation-status" role="status" aria-live="polite">就绪</p>
+  </section>
 </body>
 </html>

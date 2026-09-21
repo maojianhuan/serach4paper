@@ -2,19 +2,35 @@
 var Search4PaperUI = {
   Zotero: window.arguments[0].Zotero,
   ieee: window.arguments[0].ieeeSession,
+  activePage: "search", operationPage: null,
   papers: [], candidates: [], selected: new Set(), active: null,
   page: 0, pageSize: 100, busy: false, controller: null, query: null, loadedYear: null, loadedConference: null, filtersDirty: true,
   labels: { title: "标题", abstract: "摘要", keywords: "关键词", tldr: "TLDR" },
   $(id) { return document.getElementById(id); },
+  switchPage(page) {
+    this.activePage = page;
+    for (const name of ["search", "fulltext"]) {
+      this.$("page-" + name).hidden = name !== page;
+      this.$("tab-" + name).setAttribute("aria-selected", String(name === page));
+      this.$("tab-" + name).tabIndex = name === page ? 0 : -1;
+    }
+    this.$("page-title").textContent = page === "search" ? "论文检索" : "全文获取";
+  },
   status(text, error = false) {
-    this.$("status").textContent = text;
-    this.$("status").classList.toggle("error", error);
+    const id = (this.operationPage || this.activePage) === "fulltext" ? "fulltext-status" : "status";
+    this.$(id).textContent = text;
+    this.$(id).classList.toggle("error", error);
   },
   controls() {
     for (const element of document.querySelectorAll("input, select, button")) element.disabled = this.busy;
-    this.$("cancel").disabled = !this.busy;
+    this.$("tab-search").disabled = this.$("tab-fulltext").disabled = false;
+    this.$("cancel").disabled = !this.busy || this.operationPage !== "search";
+    this.$("fulltext-cancel").disabled = !this.busy || this.operationPage !== "fulltext";
     if (this.busy) return;
-    this.$("filter").disabled = !this.papers.length;
+    const noConference = !this.$("conference").value;
+    this.$("conference").disabled = noConference;
+    this.$("fetch").disabled = this.$("refresh-papers").disabled = noConference;
+    this.$("filter").disabled = noConference || !this.papers.length;
     this.$("import").disabled = !this.selected.size || this.filtersDirty;
     this.$("import").title = this.filtersDirty ? "检索条件已修改，请先搜索论文或应用筛选。"
       : !this.selected.size ? "请勾选论文左侧的复选框，或点击“选中本页”。" : "导入到所选文献库位置。";
@@ -23,11 +39,27 @@ var Search4PaperUI = {
     this.$("previous").disabled = this.page === 0;
     this.$("next").disabled = (this.page + 1) * this.pageSize >= this.candidates.length;
     this.$("source").disabled = !this.active;
-    this.$("pdf-link").disabled = !this.active?.pdfURL;
+  },
+  updateConferenceOptions() {
+    const select = this.$("conference"), previous = select.value;
+    const names = Search4PaperCore.filterConferences({ field: this.$("venue-field").value,
+      type: this.$("venue-type").value, rank: this.$("venue-rank").value });
+    select.replaceChildren();
+    for (const name of names) select.add(new Option(name, name));
+    select.value = names.includes(previous) ? previous : names[0] || "";
+    this.$("venue-summary").textContent = names.length
+      ? `CCF 2026 · 当前可选 ${names.length} / ${Search4PaperCore.CONFERENCES.length} 个会议。三个目录条件同时满足；仅显示已支持来源。`
+      : "当前组合暂无已支持来源。期刊和其他会议尚未接入，请调整目录筛选。";
+    if (previous !== select.value && this.loadedConference) {
+      this.filtersDirty = true;
+      this.status("会议选择已改变；已有结果保留，更换会议后请重新搜索。");
+    }
+    this.controls();
   },
   async operation(action) {
     if (this.busy) return;
     this.busy = true;
+    this.operationPage = this.activePage;
     this.controller = new AbortController();
     this.controls();
     try { await action(this.controller.signal); }
@@ -37,6 +69,7 @@ var Search4PaperUI = {
     }
     finally {
       this.busy = false;
+      this.operationPage = null;
       this.controller = null;
       if (!window.closed) this.controls();
     }
@@ -131,9 +164,11 @@ var Search4PaperUI = {
     this.papers = metadata.papers;
     this.loadedYear = year;
     this.loadedConference = conference;
-    const scope = conference === "ACL" ? (year < 2020 ? "主会第 1 卷" : "主会 Long Papers") : conference === "EMNLP" ? (year < 2020 ? "主会第 1 卷" : "主会 main 卷")
-      : conference === "AAAI" ? "Technical Tracks" : "主会论文";
+    const scope = (Search4PaperCore.DATABASE_SOURCES[conference] || Search4PaperCore.SYSTEMS_SOURCES[conference])
+      ? [...new Set(this.papers.map(p => p.track))].join(" / ") : conference === "ACL" ? (year < 2020 ? "主会第 1 卷" : "主会 Long Papers") : conference === "EMNLP" ? (year < 2020 ? "主会第 1 卷" : "主会 main 卷")
+      : conference === "ICDE" ? "Research Papers" : conference === "AAAI" ? "Technical Tracks" : "主会论文";
     this.$("coverage").textContent = `${conference} ${year} · ${source} · ${scope} ${this.papers.length} 篇 · 缺少摘要 ${this.papers.filter(p => !p.abstract.trim()).length} 篇 · ${local ? "本地名单" : "已保存到本地"} · 获取时间 ${new Date(metadata.fetchedAt).toLocaleString()}`;
+    if (this.papers[0]?.retrievalWarning) this.$("coverage").textContent += ` · ${this.papers[0].retrievalWarning}`;
     await this.filterPapers(signal, query);
   },
   async filterPapers(signal, query = this.readQuery()) {
@@ -226,36 +261,91 @@ var Search4PaperUI = {
     this.$("new-collection").value = "";
     const failed = outcome.results.find(result => result.error);
     if (failed) summary += `\n${failed.paper.title}：${failed.error}`;
-    if (this.$("include-pdf").checked && !signal.aborted && !failed) {
-      this.status(summary + " 正在调用 Zotero 获取 PDF…");
-      const pdfs = await Search4PaperImport.findPDFs(this.Zotero, outcome.results, { signal,
-        onProgress: (done, total, title) => this.status(summary + `\nZotero 获取 PDF ${done} / ${total}：${title}。取消会停止后续论文。`) });
-      this.lastPDFs = pdfs;
-      summary += ` PDF 附件 ${pdfs.filter(pdf => pdf.hasPDF).length} / ${outcome.results.length}；未取得全文的条目已保留。`;
-      for (const pdf of pdfs.filter(pdf => !pdf.hasPDF)) summary += `\n${pdf.title}：${pdf.error || "Zotero 未取得可用 PDF"}`;
-    }
     if (signal.aborted) summary += " 已取消后续处理。";
     this.status(summary, Boolean(failed));
   },
-  async downloadIEEE(signal) {
-    const items = this.Zotero.getActiveZoteroPane()?.getSelectedItems() || [];
-    const outcomes = await this.ieee.download(items, { signal, onProgress: result => {
-      this.$("ieee-status").textContent = this.ieee.status;
-      this.status(`IEEE ${result.index} / ${result.total}：${result.title} · ${result.phase === "waiting" ? "等待下载间隔" : result.phase === "downloading" ? "开始下载 " + result.startedAt : result.hasPDF ? "附件已取得" : result.error}`);
-    } });
-    this.lastIEEE = outcomes;
+  async getFullText(signal) {
+    const items = [...(this.Zotero.getActiveZoteroPane()?.getSelectedItems() || [])];
+    if (!items.length) throw new Error("请先在 Zotero 主窗口选择需要全文的文献条目。");
+    const outcomes = [];
+    for (const item of items) {
+      if (signal.aborted) break;
+      const title = item.getField("title");
+      this.status(`获取全文 ${outcomes.length + 1} / ${items.length}：${title}`);
+      try {
+        if (!item.isRegularItem() || item.deleted || !this.Zotero.Libraries.get(item.libraryID).filesEditable) {
+          throw new Error("请选择可添加附件的文献条目。");
+        }
+        // Use the existing institutional path only after the user explicitly starts login.
+        let institutional = this.ieee.context && this.ieee.hasPaperURL(item.getField("url"));
+        let result;
+        const icde = /^Source ID: icde:/m.test(item.getField("extra"));
+        if (!institutional || icde) {
+          // ICDE is not assumed paywalled: try the existing direct/Zotero path first.
+          const paper = this.lastImport?.results.find(r => r.item?.id === item.id)?.paper || { title };
+          [result] = await Search4PaperImport.findPDFs(this.Zotero, [{ item, paper }], { signal });
+        }
+        let resolutionError = "";
+        if (!result?.hasPDF && !signal.aborted && !this.ieee.hasPaperURL(item.getField("url")) && this.ieee.canResolve(item)) {
+          this.status(`正在查找 IEEE 论文地址：${title}`);
+          try {
+            await this.ieee.resolvePaperURL(item, { signal });
+            institutional = this.ieee.context && this.ieee.hasPaperURL(item.getField("url"));
+            if (!institutional && !signal.aborted) {
+              // The new URL/DOI can also help Zotero find an accessible copy without login.
+              [result] = await Search4PaperImport.findPDFs(this.Zotero, [{ item, paper: { title } }], { signal });
+            }
+          }
+          catch (error) { resolutionError = error.message; }
+        }
+        if (institutional && !result?.hasPDF && !signal.aborted) {
+          [result] = await this.ieee.download([item], { signal, onProgress: progress => {
+            this.$("ieee-status").textContent = this.ieee.status;
+            this.status(`获取全文 ${outcomes.length + 1} / ${items.length}：${title} · ${progress.phase === "waiting" ? "等待下载间隔" : progress.phase === "downloading" ? "开始下载 " + progress.startedAt : progress.hasPDF ? "附件已取得" : progress.error}`);
+          } });
+        }
+        if (result && !result.hasPDF && !institutional && !signal.aborted && (icde || resolutionError || this.ieee.hasPaperURL(item.getField("url")))) {
+          const reason = resolutionError || (this.ieee.hasPaperURL(item.getField("url"))
+            ? "尚未启动 IEEE 机构登录；如需订阅访问，请先完成北航登录后重试。"
+            : "未取得 IEEE 单篇论文地址；请核实条目元数据后重试。");
+          result.error = [result.error, reason].filter(Boolean).join("；");
+        }
+        if (result) outcomes.push(result);
+      }
+      catch (error) { outcomes.push({ itemID: item.id, title, hasPDF: false, error: error.message }); }
+    }
+    this.lastPDFs = outcomes;
     this.$("ieee-status").textContent = this.ieee.status;
-    this.status(`IEEE PDF：成功 ${outcomes.filter(r => r.hasPDF).length}，失败 ${outcomes.filter(r => !r.hasPDF).length}，未处理 ${items.length - outcomes.length}。文献条目已保留。\n`
-      + outcomes.map(r => `${r.title}：${r.reused ? "复用已有 PDF" : r.hasPDF ? "下载成功" : r.error}${r.startedAt ? `（请求开始 ${r.startedAt}）` : ""}`).join("\n"));
+    this.status(`全文获取：成功 ${outcomes.filter(r => r.hasPDF).length}，失败 ${outcomes.filter(r => !r.hasPDF).length}，未处理 ${items.length - outcomes.length}。文献条目已保留。${signal.aborted ? " 已取消后续处理。" : ""}\n`
+      + outcomes.map(r => `${r.title}：${r.reused ? "复用已有 PDF" : r.hasPDF ? "附件已取得" : r.error || "未取得可用全文"}${r.startedAt ? `（请求开始 ${r.startedAt}）` : ""}`).join("\n"));
   },
   init() {
+    for (const page of ["search", "fulltext"]) {
+      const tab = this.$("tab-" + page);
+      tab.addEventListener("click", () => this.switchPage(page));
+      tab.addEventListener("keydown", event => {
+        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+        event.preventDefault();
+        const next = event.key === "Home" ? "search" : event.key === "End" ? "fulltext" : page === "search" ? "fulltext" : "search";
+        this.switchPage(next); this.$("tab-" + next).focus();
+      });
+    }
     this.$("ieee-status").textContent = this.ieee.status;
     this.$("ieee-login").addEventListener("click", () => this.operation(async () => {
       this.ieee.login();
       this.$("ieee-status").textContent = this.ieee.status;
     }));
-    this.$("ieee-download").addEventListener("click", () => this.operation(signal => this.downloadIEEE(signal)));
-    for (const conference of Search4PaperCore.CONFERENCES) this.$("conference").add(new Option(conference, conference));
+    this.$("get-fulltext").addEventListener("click", () => this.operation(signal => this.getFullText(signal)));
+    this.$("fulltext-cancel").addEventListener("click", () => {
+      if (this.operationPage === "fulltext") this.controller?.abort();
+    });
+    for (const field of new Set(Object.values(Search4PaperCore.CONFERENCE_CATEGORIES).map(venue => venue.field))) {
+      this.$("venue-field").add(new Option(field, field));
+    }
+    for (const id of ["venue-field", "venue-type", "venue-rank"]) {
+      this.$(id).addEventListener("change", () => this.updateConferenceOptions());
+    }
+    this.updateConferenceOptions();
     for (const input of document.querySelectorAll(".query input, .query select, .filter input")) {
       input.addEventListener("input", () => {
         this.updateQuerySummary();
@@ -267,7 +357,9 @@ var Search4PaperUI = {
     this.$("refresh-papers").addEventListener("click", () => this.operation(signal => this.fetchPapers(signal, true)));
     this.$("filter").addEventListener("click", () => this.operation(signal => this.filterPapers(signal)));
     this.$("import").addEventListener("click", () => this.operation(signal => this.importPapers(signal)));
-    this.$("cancel").addEventListener("click", () => this.controller?.abort());
+    this.$("cancel").addEventListener("click", () => {
+      if (this.operationPage === "search") this.controller?.abort();
+    });
     this.$("refresh").addEventListener("click", () => this.refreshCollections());
     this.$("select-page").addEventListener("click", () => {
       for (const paper of this.candidates.slice(this.page * this.pageSize, (this.page + 1) * this.pageSize)) this.selected.add(paper.id);
@@ -277,7 +369,6 @@ var Search4PaperUI = {
     this.$("previous").addEventListener("click", () => { this.page--; this.render(); });
     this.$("next").addEventListener("click", () => { this.page++; this.render(); });
     this.$("source").addEventListener("click", () => this.Zotero.launchURL(this.active.url));
-    this.$("pdf-link").addEventListener("click", () => this.Zotero.launchURL(this.active.pdfURL));
     window.addEventListener("unload", () => this.controller?.abort());
     this.refreshCollections();
     const selected = this.Zotero.getActiveZoteroPane()?.getSelectedCollections() || [];

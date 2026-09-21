@@ -45,7 +45,7 @@ async function runSearch4PaperSmoke({ expectedDataDir, expectedIDs, reportPath }
     await parent.saveTx();
     ui.refreshCollections(); ui.$('collection').value = String(parent.id);
     ui.$('new-collection').value = 'ICML 2026 TSAD';
-    ui.$('tags').value = 'time series; anomaly detection'; ui.$('include-pdf').checked = false;
+    ui.$('tags').value = 'time series; anomaly detection';
     ui.$('select-page').click(); ui.$('import').click();
     await waitFor(() => !ui.busy);
     const first = ui.lastImport;
@@ -268,18 +268,22 @@ async function runSearch4PaperPDFSmoke({ expectedDataDir, pdfURL, fixturePath, r
       doi: '', url: 'https://example.org/search4paper-test', pdfURL, bibtex: '', evidence: [] };
     ui.candidates = [paper]; ui.selected = new Set([paper.id]); ui.page = 0;
     ui.query = { terms: ['fixture'], operator: 'AND', fields: ['title'] }; ui.filtersDirty = false;
-    ui.render(); ui.preview(paper); ui.$('include-pdf').checked = true;
+    ui.render(); ui.preview(paper);
     ui.$('collection').value = ''; ui.$('new-collection').value = 'XPI PDF fixture';
     await ui.operation(signal => ui.importPapers(signal));
-    assert(ui.lastPDFs?.[0]?.hasPDF, ui.$('status').textContent);
     const item = ui.lastImport.results[0].item;
+    assert(!item.getAttachments().length, 'Search import must not retrieve PDF');
+    await Zotero.getActiveZoteroPane().selectItems([item.id]);
+    ui.switchPage('fulltext');
+    await ui.operation(signal => ui.getFullText(signal));
+    assert(ui.lastPDFs?.[0]?.hasPDF, ui.$('fulltext-status').textContent);
     const attachments = await Zotero.Items.getAsync(item.getAttachments());
     assert(attachments.length === 1, 'Exactly one stored attachment');
     const actual = await IOUtils.read(await attachments[0].getFilePathAsync());
     const expected = await IOUtils.read(fixturePath);
     assert(actual.length === expected.length && actual.every((value, i) => value === expected[i]), 'Stored PDF bytes must equal the fixture');
-    await ui.operation(signal => ui.importPapers(signal));
-    assert(item.getAttachments().length === 1 && ui.lastPDFs[0].hasPDF, 'Repeat import must reuse the PDF');
+    await ui.operation(signal => ui.getFullText(signal));
+    assert(item.getAttachments().length === 1 && ui.lastPDFs[0].hasPDF, 'Repeat retrieval must reuse the PDF');
     report.ok = true; report.bytes = actual.length; report.itemID = item.id;
   }
   catch (error) { report.ok = false; report.error = String(error); report.stack = error.stack; }
@@ -370,7 +374,7 @@ async function runSearch4PaperDropdownSmoke({ expectedDataDir, reportPath }) {
     click(ui.$('refresh'));
     assert(ui.$('collection').value === String(child.id), 'Refreshing collections must keep the selected child');
 
-    ui.$('new-collection').value = ''; ui.$('include-pdf').checked = false;
+    ui.$('new-collection').value = '';
     report.imports = [];
     for (const [conference, expectedTitle] of [
       ['ICML', 'International Conference on Machine Learning (ICML 2026)'],

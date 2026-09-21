@@ -17,9 +17,10 @@ var Search4PaperIEEE = class {
     if (this.closed) throw new Error("IEEE 会话已关闭，请重新启用插件。");
     if (!this.context) this.context = this.Zotero.HTTP.newCookieContext();
     if (this.viewer && !this.viewer.closed) this.viewer.focus();
-    else this.viewer = this.Zotero.openInViewer("https://ieeexplore.ieee.org/", {
-      userContextId: this.context.id, allowJavaScript: true
-    });
+    else this.viewer = this.Zotero.getMainWindow().openDialog(
+      "chrome://search4paper/content/ieee-login.xhtml", "search4paper-ieee-login",
+      "chrome,centerscreen,resizable,width=1000,height=760", { userContextId: this.context.id }
+    );
     this.status = "请在 IEEE 页面选择 Institutional Sign In → Beihang University，手动完成登录；PDF 访问尚未验证。";
   }
 
@@ -33,6 +34,86 @@ var Search4PaperIEEE = class {
     const id = document?.[1] || (stamp && url.searchParams.get("arnumber"));
     if (!id || !/^\d+$/.test(id)) throw new Error("请在 Zotero 条目的 URL 栏填写 IEEE /document/论文编号 或带 arnumber 的 PDF 链接。");
     return `https://ieeexplore.ieee.org/stampPDF/getPDF.jsp?arnumber=${id}`;
+  }
+
+  hasPaperURL(value) {
+    try { this.pdfURL(value); return true; }
+    catch { return false; }
+  }
+
+  canResolve(item) {
+    return /^Source ID: icde:/m.test(item.getField("extra"))
+      || /^10\.1109\//i.test(item.getField("DOI"))
+      || /\b(?:IEEE|ICDE)\b/i.test(item.getField("conferenceName"))
+      || /^https:\/\/(?:ieeexplore\.ieee\.org|ieee-icde\.org)(?:\/|$)/i.test(item.getField("url"));
+  }
+
+  async resolvePaperURL(item, { signal } = {}) {
+    if (this.hasPaperURL(item.getField("url"))) return false;
+    const normalize = value => String(value || "").normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+    const doi = item.getField("DOI").trim().replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "");
+    const title = normalize(item.getField("title"));
+    const year = item.getField("date").match(/\b(?:19|20)\d{2}\b/)?.[0];
+    const authors = item.getCreators().filter(c => c.creatorTypeID === this.Zotero.CreatorTypes.getID("author"))
+      .map(c => normalize([c.firstName, c.lastName].filter(Boolean).join(" ")));
+    if (!title || (!doi && (!year || !authors.length))) {
+      throw new Error("IEEE 地址补全：缺少标题、年份或作者，无法可靠核对；请手动核实论文地址。");
+    }
+    const endpoint = doi ? `https://api.crossref.org/works/${encodeURIComponent(doi)}`
+      : `https://api.crossref.org/works?filter=prefix:10.1109&rows=20&query.bibliographic=${encodeURIComponent(item.getField("title"))}`;
+    let cancel;
+    const abort = () => cancel?.();
+    signal?.throwIfAborted();
+    signal?.addEventListener("abort", abort, { once: true });
+    let response;
+    try {
+      // Public bibliographic metadata only; never send the institutional cookie context.
+      response = await this.Zotero.HTTP.request("GET", endpoint, {
+        responseType: "json", timeout: 30000, errorDelayMax: 0, noRetryOnThrottle: true,
+        cancellerReceiver(fn) { cancel = fn; if (signal?.aborted) fn(); }
+      });
+    }
+    catch (error) {
+      signal?.throwIfAborted();
+      throw new Error(`IEEE 地址补全：Crossref 查询失败${error.status ? `（HTTP ${error.status}）` : ""}；未修改条目。`);
+    }
+    finally { signal?.removeEventListener("abort", abort); }
+    signal?.throwIfAborted();
+    const message = response.response?.message;
+    const records = doi ? (message?.DOI ? [message] : null) : message?.items;
+    if (!Array.isArray(records)) throw new Error("IEEE 地址补全：Crossref 返回的元数据格式无效。");
+    const matches = records.filter(record => {
+      if (!/^10\.1109\//i.test(record.DOI || "") || !record.title?.some(t => normalize(t) === title)) return false;
+      if (doi && record.DOI.toLowerCase() !== doi.toLowerCase()) return false;
+      const years = [record.event?.start, record.published, record["published-print"], record["published-online"]]
+        .map(date => String(date?.["date-parts"]?.[0]?.[0] || ""));
+      if (year && !years.includes(year)) return false;
+      const names = (record.author || []).map(a => normalize([a.given, a.family].filter(Boolean).join(" ")));
+      return !authors.length || authors.some(a => names.includes(a));
+    });
+    const unique = [...new Map(matches.map(record => [record.DOI.toLowerCase(), record])).values()];
+    if (unique.length !== 1) throw new Error(unique.length
+      ? "IEEE 地址补全：存在多个匹配，未自动修改；请核实论文地址后重试。"
+      : "IEEE 地址补全：未找到标题、作者和年份一致的记录；可能尚未收录，请稍后重试或手动填写地址。");
+    const record = unique[0];
+    const url = record.resource?.primary?.URL;
+    if (!this.hasPaperURL(url)) throw new Error("IEEE 地址补全：匹配记录未提供有效 IEEE 单篇论文地址；未修改条目。");
+    if (!this.Zotero.Libraries.get(item.libraryID).editable) throw new Error("IEEE 地址补全：文献库不可编辑。");
+    signal?.throwIfAborted();
+    const old = { url: item.getField("url"), DOI: item.getField("DOI"), extra: item.getField("extra") };
+    try {
+      item.setField("url", url);
+      if (!old.DOI) item.setField("DOI", record.DOI);
+      // Preserve the previous source link when replacing a conference-list URL.
+      const source = old.url ? `Original URL: ${old.url}` : "";
+      if (source && !old.extra.split("\n").includes(source)) item.setField("extra", [old.extra, source].filter(Boolean).join("\n"));
+      await item.saveTx();
+    }
+    catch (error) {
+      for (const [field, value] of Object.entries(old)) item.setField(field, value);
+      throw error;
+    }
+    return true;
   }
 
   download(items, { signal, onProgress = () => {} } = {}) {

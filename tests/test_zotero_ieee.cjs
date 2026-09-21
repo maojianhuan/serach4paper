@@ -9,6 +9,7 @@ function fixture(responses = []) {
   const requests = [], imports = [], writes = [], removed = [], viewers = [], disposed = [], sleeps = [];
   const context = {id: 123456, dispose: () => disposed.push(context.id)};
   const Zotero = {
+    CreatorTypes: {getID: () => 1},
     HTTP: {
       newCookieContext() { sequence++; return context; },
       async request(method, url, options) {
@@ -23,10 +24,10 @@ function fixture(responses = []) {
         } finally {live--;}
       }
     },
-    openInViewer(url, options) {
+    getMainWindow() { return { openDialog(url, name, features, options) {
       const win = {url,options,closed:false,focus(){this.focused=true;},close(){this.closed=true;}};
       viewers.push(win); return win;
-    },
+    } }; },
     Libraries: {get: () => ({filesEditable:true})},
     Items: {getAsync: async ids => ids.map(() => ({attachmentContentType:'application/pdf',isFileAttachment:()=>true,fileExists:async()=>true}))},
     Attachments: {
@@ -49,8 +50,8 @@ test('explicit login shares one context across visible viewers and requests; dis
   const f=fixture(); assert.throws(()=>f.service.download([f.item(1)]),/先启动/);
   f.service.login();f.service.login();
   assert.equal(f.contexts,1);assert.equal(f.viewers.length,1);assert.equal(f.viewers[0].focused,true);
-  assert.equal(f.viewers[0].url,'https://ieeexplore.ieee.org/');
-  assert.equal(f.viewers[0].options.allowJavaScript,true);assert.match(f.service.status,/尚未验证/);
+  assert.equal(f.viewers[0].url,'chrome://search4paper/content/ieee-login.xhtml');
+  assert.match(f.service.status,/尚未验证/);
   f.viewers[0].close();f.service.login();assert.equal(f.contexts,1);
   await f.service.download([f.item(1)]);
   assert.equal(f.requests[0].options.userContextId,f.viewers[1].options.userContextId);
@@ -118,4 +119,100 @@ test('disposal cancels the active HTTP request before disposing the cookie conte
   const task=f.service.download([f.item(1),f.item(2)],{onProgress:p=>{if(p.phase==='downloading')started();}});
   await reached;await f.service.dispose();const r=await task;
   assert.equal(f.requests.length,1);assert.match(r[0].error,/取消/);assert.deepEqual(f.disposed,[123456]);
+});
+
+test('login browser and popup contexts retain cookie isolation and native navigation ownership', () => {
+  const appended = [], loads = [];
+  const controls = new Map(['back','close-popup','site','login-content'].map(id=>[id,{addEventListener(){}}]));
+  controls.get('login-content').appendChild = browser => {
+    assert.equal(browser.attributes.usercontextid,'42');
+    assert.notEqual(browser.attributes.messagemanagergroup,'basicViewer');
+    appended.push(browser);
+  };
+  const window = {arguments:[{userContextId:42}],addEventListener(){},close(){this.closed=true;}};
+  const document = {getElementById:id=>controls.get(id),createXULElement:()=>({attributes:{},hidden:false,
+    setAttribute(name,value){this.attributes[name]=value;},browsingContext:{sandboxFlags:0x80},
+    currentURI:{schemeIs:()=>false},addProgressListener(){},addEventListener(){},remove(){this.removed=true;},
+    loadURI(uri,options){loads.push({browser:this,uri,options});}})};
+  const scope={window,document,ChromeUtils:{generateQI:()=>()=>{}},Ci:{nsIWebProgress:{NOTIFY_LOCATION:1}},
+    Services:{io:{newURI:uri=>uri},scriptSecurityManager:{getSystemPrincipal:()=> 'system'}}};
+  vm.runInNewContext(readFileSync(require.resolve('../zotero-plugin/content/ieee-login.js'),'utf8'),scope);
+  scope.IEEELogin.init();
+  assert.equal(loads.length,1);assert.equal(loads[0].uri,'https://ieeexplore.ieee.org/');
+  const info={originAttributes:{userContextId:42},isRemote:false,parent:{}};
+  const context=window.browserDOMWindow.createContentWindow('https://example.org/post',info);
+  assert.equal(context,appended[1].browsingContext);assert.equal(appended[1].openWindowInfo,info);
+  assert.equal(loads.length,1,'Gecko must perform the new-context load, preserving POST rather than converting it to GET');
+  assert.equal(appended[0].hidden,true);
+  const principal={origin:'https://example.org'},csp={};
+  window.browserDOMWindow.openURI('https://example.org/login',info,0,0,principal,csp);
+  assert.equal(loads[1].options.triggeringPrincipal,principal);assert.equal(loads[1].options.csp,csp);
+  const popup=scope.IEEELogin.browser;scope.IEEELogin.closeBrowser(popup);
+  assert.equal(popup.removed,true);assert.equal(appended[1].hidden,false);
+  assert.throws(()=>window.browserDOMWindow.createContentWindow(null,{originAttributes:{userContextId:7}}),/Cookie 上下文不一致/);
+});
+
+test('login popup actor preserves native navigation and security features without window sizing', () => {
+  const calls = [], popup = {};
+  const win = {open(...args) { calls.push({receiver:this,args}); return popup; },wrappedJSObject:{}};
+  const scope = {JSWindowActorChild:class {}, Cu:{exportFunction(fn,target,options){target[options.defineAs]=fn;}}};
+  const source = readFileSync(require.resolve('../zotero-plugin/content/IEEELoginNavigationChild.mjs'),'utf8');
+  vm.runInNewContext(source.replace('export class IEEELoginNavigationChild','var IEEELoginNavigationChild = class'),scope);
+  const actor = new scope.IEEELoginNavigationChild();actor.contentWindow=win;actor.handleEvent();
+  assert.equal(win.wrappedJSObject.open('https://example.org/sso','sso','width=500,height=500,noopener,noreferrer=yes'),popup);
+  assert.equal(calls[0].receiver,win);
+  assert.deepEqual(calls[0].args,['https://example.org/sso','sso','noopener,noreferrer=yes']);
+  win.wrappedJSObject.open('https://example.org/sso','sso');
+  assert.equal(calls[1].args[2],'');
+});
+
+function metadataItem(fields = {}) {
+  const values = {title:'UMGAD: Unsupervised Multiplex Graph Anomaly Detection',date:'2025',DOI:'',
+    url:'https://ieee-icde.org/2025/research-papers/',extra:'Source ID: icde:2025:1',conferenceName:'IEEE International Conference on Data Engineering',...fields};
+  return {libraryID:1,values,saves:0,getField:f=>values[f]||'',setField:(f,v)=>{values[f]=v;},
+    getCreators:()=>[{creatorTypeID:1,lastName:'Xiang Li',fieldMode:1}],async saveTx(){this.saves++;}};
+}
+const metadataRecord = {DOI:'10.1109/ICDE65448.2025.00278',title:['UMGAD: Unsupervised Multiplex Graph Anomaly Detection'],
+  author:[{given:'Xiang',family:'Li'}],published:{'date-parts':[[2025,5,19]]},
+  resource:{primary:{URL:'https://ieeexplore.ieee.org/document/11113091/'}}};
+function metadataFixture(records, doi = false) {
+  const f=fixture([()=>({response:{message:doi?records[0]:{items:records}}})]);
+  f.Zotero.Libraries.get=()=>({editable:true,filesEditable:true});return f;
+}
+test('IEEE metadata lookup writes a verified URL and missing DOI, preserving original source without cookies',async()=>{
+  const f=metadataFixture([metadataRecord]),item=metadataItem();f.service.login();
+  assert.equal(f.service.canResolve(item),true);
+  assert.equal(await f.service.resolvePaperURL(item),true);
+  assert.equal(item.values.url,metadataRecord.resource.primary.URL);assert.equal(item.values.DOI,metadataRecord.DOI);
+  assert.match(item.values.extra,/Source ID: icde:2025:1\nOriginal URL: https:/);assert.equal(item.saves,1);
+  assert.equal(f.requests[0].options.userContextId,undefined);
+  assert.match(f.requests[0].url,/query.bibliographic=/);
+  assert.equal(await f.service.resolvePaperURL(item),false);assert.equal(f.requests.length,1);
+});
+test('DOI lookup uses exact endpoint and rejects metadata inconsistent with the item',async()=>{
+  const f=metadataFixture([metadataRecord],true),item=metadataItem({DOI:metadataRecord.DOI});
+  await f.service.resolvePaperURL(item);assert.match(f.requests[0].url,/works\/10.1109%2FICDE/);
+  const bad=metadataFixture([{...metadataRecord,DOI:'10.1109/other'}],true);
+  await assert.rejects(bad.service.resolvePaperURL(metadataItem({DOI:metadataRecord.DOI})),/未找到/);
+});
+test('ambiguous, mismatched, absent and unsafe IEEE metadata never changes the item',async()=>{
+  for (const records of [[],[metadataRecord,{...metadataRecord,DOI:'10.1109/other'}],
+    [{...metadataRecord,title:['Different title']}],[{...metadataRecord,author:[{given:'Other',family:'Li'}]}],
+    [{...metadataRecord,published:{'date-parts':[[2024]]}}],
+    [{...metadataRecord,resource:{primary:{URL:'https://example.org/document/1'}}}]]) {
+    const f=metadataFixture(records),item=metadataItem(),before={...item.values};
+    await assert.rejects(f.service.resolvePaperURL(item),/IEEE 地址补全/);
+    assert.deepEqual(item.values,before);assert.equal(item.saves,0);
+  }
+});
+test('lookup cancellation, malformed responses, write failure and read-only libraries do not leave metadata changes',async()=>{
+  const f=metadataFixture([metadataRecord]),item=metadataItem(),before={...item.values};
+  const controller=new AbortController();controller.abort();
+  await assert.rejects(f.service.resolvePaperURL(item,{signal:controller.signal}));assert.equal(f.requests.length,0);
+  item.saveTx=async()=>{throw new Error('save failure');};
+  await assert.rejects(f.service.resolvePaperURL(item),/save failure/);assert.deepEqual(item.values,before);
+  const readOnly=metadataFixture([metadataRecord]);readOnly.Zotero.Libraries.get=()=>({editable:false});
+  await assert.rejects(readOnly.service.resolvePaperURL(metadataItem()),/不可编辑/);
+  const malformed=fixture([()=>({response:{message:{}}})]);
+  await assert.rejects(malformed.service.resolvePaperURL(metadataItem()),/格式无效/);
 });

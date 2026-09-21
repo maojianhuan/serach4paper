@@ -57,11 +57,22 @@ var Search4PaperImport = {
             item.setField("date", String(paper.year));
             item.setField("url", paper.url);
             item.setField("DOI", paper.doi);
+            if (conference === "ICDE" || (Search4PaperCore.DATABASE_SOURCES[conference] || Search4PaperCore.SYSTEMS_SOURCES[conference])) item.setField("conferenceName", conferenceName);
             item.setField("proceedingsTitle", `${conferenceName} (${conference} ${paper.year})`);
+            if ((Search4PaperCore.DATABASE_SOURCES[conference] || Search4PaperCore.SYSTEMS_SOURCES[conference])) {
+              if (paper.publicationTitle) item.setField("proceedingsTitle", paper.publicationTitle);
+              if (paper.date) item.setField("date", paper.date);
+              if (paper.pages) item.setField("pages", paper.pages);
+            }
             item.setField("extra", paper.source && paper.source !== "openreview"
               ? `Source ID: ${paper.source}:${paper.id}` : `OpenReview ID: ${paper.id}`);
             // Preserve source author names without guessing surnames.
             item.setCreators(paper.authors.map(name => ({ lastName: name, fieldMode: 1, creatorType: "author" })));
+          }
+          if (paper.source === "icde") {
+            const extra = item.getField("extra");
+            const sourceLine = `Official URL: ${paper.sourceURL}`;
+            if (!extra.split("\n").includes(sourceLine)) item.setField("extra", [extra, sourceLine].filter(Boolean).join("\n"));
           }
           if (collection) item.addToCollection(collection.id);
           for (const tag of tags) item.addTag(tag);
@@ -86,6 +97,22 @@ var Search4PaperImport = {
     return { results, collectionID: collection?.id || null, unprocessed: papers.length - results.length };
   },
 
+  openReviewPDFURL(item) {
+    const value = item.getField("url");
+    if (URL.canParse(value)) {
+      const url = new URL(value);
+      if (url.protocol === "https:" && url.hostname === "openreview.net" && !url.port && !url.username && !url.password) {
+        if (url.pathname === "/forum" || url.pathname === "/pdf") {
+          const id = url.searchParams.get("id");
+          if (id && /^[A-Za-z0-9_-]+$/.test(id)) return `https://openreview.net/pdf?id=${encodeURIComponent(id)}`;
+        }
+        if (/^\/pdf\/[a-f0-9]+\.pdf$/i.test(url.pathname)) return url.href;
+      }
+    }
+    const id = item.getField("extra").match(/^OpenReview ID: ([A-Za-z0-9_-]+)\s*$/m)?.[1];
+    return id ? `https://openreview.net/pdf?id=${encodeURIComponent(id)}` : "";
+  },
+
   async findPDFs(Zotero, results, { signal, onProgress = () => {} } = {}) {
     const outcomes = [];
     for (const { item, paper } of results.filter(result => result.item)) {
@@ -93,14 +120,24 @@ var Search4PaperImport = {
       onProgress(outcomes.length + 1, results.length, paper.title);
       let error = "";
       try {
-        if (Zotero.Attachments.canFindFileForItem(item)) {
+        // Recover the stable note-based URL from the saved item, even after reopening
+        // the window or selecting papers from an older import batch.
+        const pdfURL = this.openReviewPDFURL(item) || paper.pdfURL;
+        const existing = await Zotero.Items.getAsync(item.getAttachments());
+        let hasExistingPDF = false;
+        for (const attachment of existing) {
+          if (attachment.attachmentContentType === "application/pdf" && attachment.isFileAttachment()
+              && await attachment.fileExists()) hasExistingPDF = true;
+        }
+        if (!hasExistingPDF && (Zotero.Attachments.canFindFileForItem(item)
+            || (pdfURL && item.isRegularItem() && !item.isFeedItem))) {
           const failures = [];
-          for (const direct of (paper.pdfURL ? [true, false] : [false])) {
+          for (const direct of (pdfURL ? [true, false] : [false])) {
             signal?.throwIfAborted();
             let attemptError = "", attachment;
             const stage = direct ? "直接下载" : "Zotero 原生全文查找";
             try {
-              const resolvers = direct ? [{ url: paper.pdfURL }]
+              const resolvers = direct ? [{ url: pdfURL }]
                 : Zotero.Attachments.getFileResolvers(item);
               attachment = await Zotero.Attachments.addFileFromURLs(item, resolvers, {
                 onBeforeRequest() { signal?.throwIfAborted(); },

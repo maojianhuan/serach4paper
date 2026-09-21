@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?xml-stylesheet href="chrome://global/skin/" type="text/css"?>
+<window xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+        xmlns:html="http://www.w3.org/1999/xhtml"
+        windowtype="search4paper:ieee-login" title="IEEE 北航机构登录" width="1000" height="760">
+  <script src="ieee-login.js"/>
+  <hbox align="center" style="padding: 8px;">
+    <button id="back" label="后退"/>
+    <button id="close-popup" label="关闭弹出页" hidden="true"/>
+    <label id="site" value="正在打开 IEEE Xplore…" flex="1"/>
+  </hbox>
+  <vbox id="login-content" flex="1"/>
+</window>

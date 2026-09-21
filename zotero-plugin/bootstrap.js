@@ -15,6 +15,11 @@ async function startup({ rootURI }) {
     .registerChrome(Services.io.newURI(rootURI + "manifest.json"), [
       ["content", "search4paper", rootURI + "content/"]
     ]);
+  ChromeUtils.registerWindowActor("IEEELoginNavigation", {
+    child: { esModuleURI: "chrome://search4paper/content/IEEELoginNavigationChild.mjs",
+      events: { DOMDocElementInserted: {} } },
+    allFrames: true, messageManagerGroups: ["search4paper-ieee-login"]
+  });
   pluginRootURI = rootURI;
   pluginActive = true;
   for (const window of Zotero.getMainWindows()) onMainWindowLoad({ window });
@@ -67,6 +72,7 @@ async function shutdown() {
   searchWindow = null;
   await ieeeSession?.dispose();
   ieeeSession = null;
+  ChromeUtils.unregisterWindowActor("IEEELoginNavigation");
   for (const window of Zotero.getMainWindows()) onMainWindowUnload({ window });
   chromeHandle?.destruct();
   chromeHandle = null;

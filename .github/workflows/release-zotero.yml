@@ -41,7 +41,7 @@ jobs:
           PY
 
       - name: Test plugin logic
-        run: node --test tests/test_zotero_plugin.cjs tests/test_zotero_ieee.cjs
+        run: node --test tests/test_zotero_plugin.cjs tests/test_zotero_ieee.cjs tests/test_zotero_database.cjs tests/test_zotero_systems.cjs
 
       - name: Build XPI from the tagged source
         run: python3 zotero-plugin/build.py
@@ -51,8 +51,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PLUGIN_VERSION: ${{ steps.version.outputs.version }}
         run: |
-          gh release create "$RELEASE_TAG" \
-            "dist/search4paper-${PLUGIN_VERSION}.xpi" \
-            --verify-tag \
-            --title "search4paper for Zotero ${PLUGIN_VERSION}" \
-            --notes-from-tag
+          git for-each-ref --format='%(contents)' "refs/tags/$RELEASE_TAG" > release-notes.md
+          if gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" \
+              --title "search4paper for Zotero ${PLUGIN_VERSION}" \
+              --notes-file release-notes.md --draft=false --prerelease=false
+            gh release upload "$RELEASE_TAG" "dist/search4paper-${PLUGIN_VERSION}.xpi" --clobber
+          else
+            gh release create "$RELEASE_TAG" \
+              "dist/search4paper-${PLUGIN_VERSION}.xpi" \
+              --verify-tag \
+              --title "search4paper for Zotero ${PLUGIN_VERSION}" \
+              --notes-file release-notes.md
+          fi

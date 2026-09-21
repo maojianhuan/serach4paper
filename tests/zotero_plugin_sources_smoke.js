@@ -75,14 +75,25 @@ async function runSearch4PaperOfficialSourcesSmoke({ expectedDataDir, reportPath
       assert(ui.selected.has(selected.id) && !ui.$('import').disabled, 'Actual checkbox selection must enable import');
       ui.$('collection').value = String(parent.id);
       ui.$('new-collection').value = `${conference} ${year}`;
-      ui.$('include-pdf').checked = false;
       await run(signal => ui.importPapers(signal));
       const result = ui.lastImport?.results[0];
       assert(result?.item && result.status !== 'failed', ui.$('status').textContent);
       const item = result.item, collectionID = ui.lastImport.collectionID;
       assert(item.inCollection(collectionID), 'Import into the requested child collection');
-      assert(item.getField('proceedingsTitle') === `${core.CONFERENCE_NAMES[conference]} (${conference} ${year})`, 'Correct conference bibliography');
+      assert(item.getField('proceedingsTitle') === (selected.publicationTitle || `${core.CONFERENCE_NAMES[conference]} (${conference} ${year})`), 'Correct conference bibliography');
       assert(item.getField('url') === selected.url && item.getField('DOI') === selected.doi, 'Keep source URL and DOI');
+      if (core.DATABASE_SOURCES[conference] || core.SYSTEMS_SOURCES[conference]) {
+        assert(item.itemTypeID === Zotero.ItemTypes.getID('conferencePaper'), 'New sources import as conferencePaper');
+        assert(item.getField('conferenceName') === core.CONFERENCE_NAMES[conference], 'New source conference name');
+        assert(item.getCreators().map(c => c.lastName).join(';') === selected.authors.join(';'), 'New source authors');
+        assert(item.getField('pages') === (selected.pages || ''), 'New source pages');
+        assert(item.getField('abstractNote') === selected.abstract, 'New source original abstract');
+      }
+      if (conference === 'ICDE') {
+        assert(item.itemTypeID === Zotero.ItemTypes.getID('conferencePaper') && item.getField('conferenceName') === 'IEEE International Conference on Data Engineering', 'ICDE type and conferenceName');
+        assert(item.getField('extra').includes(`Official URL: ${selected.sourceURL}`), 'Keep ICDE official source even when the item URL is IEEE');
+        assert(item.getCreators().map(c => c.lastName).join(';') === selected.authors.join(';'), 'ICDE authors preserved');
+      }
       const noteCount = item.getNotes().length;
       await run(signal => ui.importPapers(signal));
       assert(ui.lastImport.results[0].status === 'existing' && ui.lastImport.results[0].item.id === item.id, 'Repeated import must reuse the same item');
@@ -272,6 +283,29 @@ async function runSearch4PaperSourceFixtureSmoke({ expectedDataDir, reportPath }
       assert(noAbstract.abstract === '', 'Missing historical abstracts stay empty');
     }
     report.checks.push('IACR: three venues, invited-talk exclusion, DOI, paper-versus-slides links, wrong year, duplicate IDs and missing abstracts');
+    const icdeRow = (number, links = '') => `<li class="paper-item"><div class="number-column">${number}</div><div class="title">FaScalSQL: A Fast SQL Engine</div><div class="authors"><span class="author-name">Ada Example*</span><span class="affiliation">(University)</span><span class="author-name">Bo Li</span><span class="affiliation">(Institute)</span></div>${links}</li>`;
+    const icdePage = rows => `<html><head><title>Accepted Research Papers</title></head><body><h2>Accepted Research Papers for ICDE 2026</h2><ul class="paper-list">${rows}</ul></body></html>`;
+    const icdeRaw = icdePage(icdeRow('01'));
+    const icde = sources.parseICDE(icdeRaw, 2026);
+    assert(icde.length === 1 && icde[0].id === '2026:1' && icde[0].authors.join(';') === 'Ada Example;Bo Li', 'ICDE author names exclude affiliation and corresponding-author marks');
+    assert(['abstract','keywords','tldr','doi','pdfURL','ieeeURL','detailURL'].every(key => icde[0][key] === ''), 'ICDE never invents absent metadata');
+    const links = '<a href="https://doi.org/10.1109/example.1">DOI</a><a href="https://ieeexplore.ieee.org/document/123">IEEE</a><a href="https://example.org/paper.pdf">PDF</a>';
+    const linked = sources.parseICDE(icdePage(icdeRow('1', links)).replace('>FaScalSQL: A Fast SQL Engine</div>', '><a href="detail/1">FaScalSQL: A Fast SQL Engine</a></div>'), 2026)[0];
+    assert(linked.doi === '10.1109/example.1' && linked.ieeeURL.endsWith('/document/123') && linked.url === linked.ieeeURL && linked.pdfURL.endsWith('/paper.pdf') && linked.detailURL.endsWith('/research-papers/detail/1'), 'Preserve only explicitly supplied ICDE links');
+    let icdeCalls = [];
+    const redirected = await sources.fetchAccepted(2026, {conference:'ICDE', request: async url => {
+      icdeCalls.push(url);
+      return icdeCalls.length === 1 ? '<html><a href="accepted-papers.html">Accepted Research Papers</a></html>' : icdeRaw;
+    }});
+    assert(icdeCalls.join('|') === 'https://ieee-icde.org/2026/research-papers/|https://icde2026.github.io/accepted-papers.html' && redirected[0].sourceURL === icdeCalls[1], 'Follow the observed official 2026 navigation only');
+    for (const [raw, year] of [[icdeRaw,2025], [icdePage(''),2026], [icdePage(icdeRow('1')+icdeRow('3')),2026], [icdeRaw.replace('class="title"','class="unknown"'),2026], [icdeRaw.replaceAll('author-name','unknown'),2026], [icdeRaw.slice(0,-7),2026]]) {
+      await rejects(() => sources.parseICDE(raw, year), /ICDE/);
+    }
+    const legacy = '<html><head><title>Research Papers – IEEE ICDE 2025</title></head><body><h1>Research Papers</h1><p>Session Chair: Not an author</p><p>404 | Real Research Paper</p><p>Ada Example (University (Lab))*; Bo Li (Institute)</p></body></html>';
+    const old = sources.parseICDE(legacy, 2025);
+    assert(old.length === 1 && old[0].id === '2025:404' && old[0].authors.join(';') === 'Ada Example;Bo Li', 'Legacy numbered research papers only, with nested affiliation parentheses');
+    await rejects(() => sources.parseICDE(legacy.replace('<p>Ada Example (University (Lab))*; Bo Li (Institute)</p>',''),2025), /ICDE/);
+    report.checks.push('ICDE: official navigation, numbered and structured lists, missing fields, explicit links, authors, malformed/empty/truncated/wrong-year failures');
     const controller = new AbortController(); let calls = 0;
     await rejects(() => sources.fetchAccepted(2025, { conference: 'AAAI', signal: controller.signal,
       request: async () => { calls++; controller.abort(); return responses[0]; } }), /Abort/);

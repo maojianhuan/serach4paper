@@ -15,8 +15,8 @@ function note(id, changes = {}) {
 const fetchWith = request => core.fetchAccepted(2026, { request });
 
 test('selecting current results enables import for all supported conferences', () => {
-  const controls = new Map(['conference', 'cancel', 'filter', 'import', 'select-page', 'clear',
-    'previous', 'next', 'source', 'pdf-link'].map(id => [id, {}]));
+  const controls = new Map(['fetch', 'refresh-papers', 'conference', 'cancel', 'filter', 'import', 'select-page', 'clear',
+    'previous', 'next', 'source', 'tab-search', 'tab-fulltext', 'fulltext-cancel'].map(id => [id, {}]));
   const context = { window: { arguments: [{ Zotero: {} }], addEventListener() {} },
     document: { querySelectorAll: () => [...controls.values()] } };
   vm.runInNewContext(readFileSync(require.resolve('../zotero-plugin/content/search.js'), 'utf8'), context);
@@ -39,13 +39,13 @@ test('selecting current results enables import for all supported conferences', (
   }
 });
 
-test('only the twelve requested conferences are available; OpenReview venue IDs remain unchanged', async () => {
-  assert.deepEqual(core.CONFERENCES, ['ICML', 'NeurIPS', 'ICLR', 'AAAI', 'ACL', 'CVPR', 'ICCV', 'EMNLP', 'ECCV', 'CRYPTO', 'EUROCRYPT', 'ASIACRYPT']);
+test('only the twenty-five requested conferences are available; OpenReview venue IDs remain unchanged', async () => {
+  assert.deepEqual(core.CONFERENCES, ['ICML', 'NeurIPS', 'ICLR', 'AAAI', 'ACL', 'CVPR', 'ICCV', 'EMNLP', 'ECCV', 'CRYPTO', 'EUROCRYPT', 'ASIACRYPT', 'ICDE', 'SIGMOD', 'KDD', 'SIGIR', 'VLDB', 'FAST', 'NSDI', 'OSDI', 'USENIX Security', 'CCS', 'NDSS', 'SIGCOMM', 'FSE']);
   for (const conference of core.OPENREVIEW_CONFERENCES) {
     for (const year of [2025, 2026]) assert.equal(core.venueID(conference, year), `${conference}.cc/${year}/Conference`);
   }
   let requests = 0;
-  for (const conference of ['KDD', 'NIPS', '', 'constructor', '../ICML']) {
+  for (const conference of ['NIPS', '', 'constructor', '../ICML']) {
     await assert.rejects(core.fetchAccepted(2026, { conference, request: async () => { requests++; } }), /请选择/);
   }
   assert.equal(requests, 0);
@@ -226,7 +226,7 @@ test('saved metadata round-trips without changing paper fields, retrieval time o
 test('local metadata is isolated by both conference and year; existing ICML files still load', () => {
   const oldICML = metadata();
   assert.equal(core.validateMetadata(oldICML, 2026, 'ICML'), oldICML);
-  for (const conference of core.CONFERENCES) {
+  for (const conference of core.CONFERENCES.filter(c => !core.DATABASE_SOURCES[c] && !core.SYSTEMS_SOURCES[c])) {
     const saved = metadata();
     saved.venueID = core.venueID(conference, 2026);
     saved.papers[0] = samplePaper(conference, 2026);
@@ -291,6 +291,9 @@ test('evidence note records keywords and their operator without interpreting HTM
 });
 
 function samplePaper(conference, year = 2025) {
+  if (conference === 'ICDE') return {id: `${year}:1`,source:'icde',year,venueID:core.venueID(conference,year),number:null,
+    url:`https://ieee-icde.org/${year}/research-papers/`,sourceURL:`https://ieee-icde.org/${year}/research-papers/`,detailURL:'',ieeeURL:'',
+    title:'Time Series Anomaly Detection',authors:['Example Author'],abstract:'',doi:'',keywords:'',tldr:'',pdfURL:'',bibtex:''};
   if (core.OPENREVIEW_CONFERENCES.includes(conference)) {
     return core.normalizeNote(note('1', { venueid: { value: core.venueID(conference, year) } }), year, conference);
   }
@@ -360,10 +363,10 @@ test('IACR identities recognize both official hosts without numeric-ID collision
   assert.equal(core.identities({url:'https://example.com/cryptodb/data/paper.php?pubkey=34309'}).has(key), false);
 });
 
-function pdfFixture(attempts, { direct = true, existing = false, signal } = {}) {
-  const scope = {};
+function pdfFixture(attempts, { direct = true, existing = false, signal, url = "", extra = "" } = {}) {
+  const scope = {URL};
   vm.runInNewContext(readFileSync(require.resolve('../zotero-plugin/content/import.js'), 'utf8'), scope);
-  const calls = [], item = { id: 123, getAttachments: () => existing ? [456] : [] };
+  const calls = [], item = { id: 123, getField: field => ({url,extra}[field] || ""), isRegularItem: () => true, getAttachments: () => existing ? [456] : [] };
   const attachment = { attachmentContentType: 'application/pdf', isFileAttachment: () => true, fileExists: async () => true };
   const Zotero = {
     Items: { getAsync: async ids => ids.length ? [attachment] : [] },
@@ -479,4 +482,214 @@ test('welcome does not open after shutdown or on a closed main window', async ()
   parent.closed = true;
   await scope.showWelcome(parent);
   assert.equal(opened, 0);
+});
+
+function workflowUI(Zotero = {}, importer = {}, ieee = {status: '尚未验证', context: null}) {
+  const ieeeScope = {URL};
+  vm.runInNewContext(readFileSync(require.resolve('../zotero-plugin/content/ieee.js'),'utf8'),ieeeScope);
+  for (const method of ['pdfURL','hasPaperURL','canResolve']) ieee[method] = ieeeScope.Search4PaperIEEE.prototype[method];
+  const elements = new Map();
+  const element = id => {
+    if (!elements.has(id)) elements.set(id, {value: '', textContent: '', disabled: false,
+      setAttribute(name, value) { this[name] = value; }, classList: {toggle() {}}});
+    return elements.get(id);
+  };
+  const scope = {AbortController, Option: function(text,value){this.text=text;this.value=value;}, Search4PaperCore: core, Search4PaperImport: importer,
+    window: {arguments: [{Zotero, ieeeSession: ieee}], addEventListener() {}},
+    document: {getElementById: element, querySelectorAll: () => [...elements.values()]}};
+  vm.runInNewContext(readFileSync(require.resolve('../zotero-plugin/content/search.js'), 'utf8'), scope);
+  return scope.Search4PaperUI;
+}
+
+test('tab switches preserve search state and keep in-flight status/cancellation on the owning page', async () => {
+  const ui = workflowUI();
+  const paper = {id: 'saved'};
+  ui.papers = ui.candidates = [paper]; ui.active = paper; ui.selected.add(paper.id); ui.page = 2;
+  ui.$('results').textContent = 'Existing rendered rows'; ui.$('abstract').textContent = 'Existing abstract';
+  let finish;
+  const task = ui.operation(async signal => {
+    ui.switchPage('fulltext');
+    ui.status('search still running');
+    assert.equal(ui.$('status').textContent, 'search still running');
+    assert.equal(ui.$('fulltext-status').textContent, '');
+    assert.equal(ui.$('cancel').disabled, false);
+    assert.equal(ui.$('fulltext-cancel').disabled, true);
+    assert.equal(ui.$('tab-search').disabled, false);
+    await new Promise(resolve => {finish = resolve;});
+    assert.equal(signal.aborted, false);
+  });
+  finish(); await task;
+  ui.status('PDF page message'); ui.switchPage('search');
+  assert.equal(ui.$('fulltext-status').textContent, 'PDF page message');
+  assert.equal(ui.candidates[0], paper); assert.equal(ui.active, paper);
+  assert.equal(ui.selected.has(paper.id), true); assert.equal(ui.page, 2);
+  assert.equal(ui.$('results').textContent, 'Existing rendered rows');
+  assert.equal(ui.$('abstract').textContent, 'Existing abstract');
+  assert.equal(ui.$('page-fulltext').hidden, true);
+});
+
+test('full-text action snapshots current Zotero selection, routes existing mechanisms in order, and isolates failures', async () => {
+  const calls = [];
+  const item = (id, url) => ({id, libraryID: 1, isRegularItem: () => true, getField: f => f === 'title' ? 'Paper '+id : url});
+  const items = [item(1, 'https://example.org/paper'), item(2, 'https://ieeexplore.ieee.org/document/2'), item(3, 'https://example.org/3')];
+  const Zotero = {getActiveZoteroPane: () => ({getSelectedItems: () => items}), Libraries: {get: () => ({filesEditable: true})}};
+  const importer = {async findPDFs(z, results) {
+    const {item, paper} = results[0]; calls.push(['generic', item.id, paper.pdfURL]);
+    if (item.id === 3) throw new Error('No full text');
+    return [{itemID: item.id, title: paper.title, hasPDF: true}];
+  }};
+  const ieee = {context: {id: 42}, status: '尚未验证', async download(selected) {
+    calls.push(['ieee', selected[0].id]);
+    return [{itemID: selected[0].id, title: 'Paper 2', hasPDF: true, startedAt: '2026-09-21T01:00:00.000Z'}];
+  }};
+  const ui = workflowUI(Zotero, importer, ieee);
+  ui.lastImport = {results: [{item: items[0], paper: {title: 'Paper 1', pdfURL: 'https://example.org/paper.pdf'}}]};
+  ui.switchPage('fulltext'); await ui.operation(signal => ui.getFullText(signal));
+  assert.deepEqual(calls, [['generic',1,'https://example.org/paper.pdf'],['ieee',2],['generic',3,undefined]]);
+  assert.equal(ui.lastPDFs.length, 3); assert.match(ui.lastPDFs[2].error, /No full text/);
+  assert.match(ui.$('fulltext-status').textContent, /成功 2，失败 1/);
+  assert.match(ui.$('fulltext-status').textContent, /请求开始/);
+  assert.equal(ui.$('status').textContent, '');
+});
+
+test('full-text retrieval supports arbitrary existing items without a login or plugin import and respects cancellation', async () => {
+  const selected = [1,2].map(id => ({id, libraryID: 1, isRegularItem: () => true, getField: () => 'Existing item'}));
+  const controller = new AbortController(); let calls = 0;
+  const ui = workflowUI({getActiveZoteroPane: () => ({getSelectedItems: () => selected}), Libraries: {get: () => ({filesEditable:true})}}, {
+    async findPDFs(z, results) { calls++; controller.abort(); return [{title: 'Existing item', hasPDF: true}]; }
+  });
+  ui.switchPage('fulltext'); await ui.getFullText(controller.signal);
+  assert.equal(calls, 1); assert.match(ui.$('fulltext-status').textContent, /未处理 1/);
+  selected.length = 0;
+  await assert.rejects(() => ui.getFullText(new AbortController().signal), /主窗口选择/);
+});
+
+test('search import creates bibliographic items without invoking PDF retrieval', async () => {
+  let imported = false;
+  const ui = workflowUI({}, {async papers(z, papers) {imported = true; return {results:[{paper: papers[0], item: {id:1}, status:'created'}],unprocessed:0};},
+    findPDFs() {throw new Error('Search must not retrieve PDFs');}});
+  const paper = {id: 'one', title: 'Test'};
+  ui.candidates = [paper]; ui.selected.add(paper.id); ui.filtersDirty = false; ui.refreshCollections = () => {};
+  await ui.importPapers(new AbortController().signal);
+  assert.equal(imported, true); assert.match(ui.$('status').textContent, /新增 1/);
+});
+
+test('ICDE metadata uses source/year identities, preserves explicit links and leaves absent fields empty', () => {
+  const paper = {id:'2026:1',source:'icde',year:2026,venueID:'ICDE/2026/Conference',title:'FaScalSQL: A Fast SQL Engine',authors:['Ada Example'],
+    abstract:'',keywords:'',tldr:'',doi:'',pdfURL:'',bibtex:'',sourceURL:'https://icde2026.github.io/accepted-papers.html',detailURL:'',ieeeURL:'',url:'https://icde2026.github.io/accepted-papers.html'};
+  const metadata = {schemaVersion:1,year:2026,venueID:paper.venueID,fetchedAt:new Date().toISOString(),paperCount:1,papers:[paper]};
+  assert.equal(core.validateMetadata(metadata,2026,'ICDE'),metadata);
+  assert.ok(core.matchPaper(paper,{terms:['FaScalSQL'],operator:'AND',fields:core.FIELDS}));
+  assert.equal(core.matchPaper(paper,{terms:['FaScalSQL'],operator:'AND',fields:['abstract']}),null);
+  assert.throws(()=>core.validateMetadata(metadata,2025,'ICDE'),/年份/);
+  assert.throws(()=>core.validateMetadata(metadata,2026,'ICML'),/会议/);
+  assert.ok(core.identities(paper).has('source:icde:2026:1'));
+  assert.ok(core.identities({extra:'Source ID: icde:2026:1'}).has('source:icde:2026:1'));
+  const linked = {...paper,doi:'10.1109/test',ieeeURL:'https://ieeexplore.ieee.org/document/123',url:'https://ieeexplore.ieee.org/document/123'};
+  core.validateMetadata({...metadata,papers:[linked]},2026,'ICDE');
+  assert.match(core.evidenceNote(linked,query),/Official source: https:\/\/icde2026.github.io/);
+  for (const change of [{id:'2025:1'},{sourceURL:'https://example.org/2026/'},{detailURL:'javascript:alert(1)'},{ieeeURL:'https://example.org/document/123'}]) {
+    assert.throws(()=>core.validateMetadata({...metadata,papers:[{...paper,...change}]},2026,'ICDE'),/ICDE/);
+  }
+});
+
+test('ICDE tries existing direct/Zotero retrieval before an explicitly started IEEE session', async () => {
+  for (const hasPDF of [true,false]) {
+    const calls = [];
+    const item = {id:1,libraryID:1,isRegularItem:()=>true,getField:f=>f==='extra'?'Source ID: icde:2026:1':f==='url'?'https://ieeexplore.ieee.org/document/123':'ICDE paper'};
+    const ui = workflowUI({getActiveZoteroPane:()=>({getSelectedItems:()=>[item]}),Libraries:{get:()=>({filesEditable:true})}},
+      {async findPDFs(){calls.push('generic');return [{hasPDF,title:'ICDE paper'}];}},
+      {context:{id:1},status:'test',async download(){calls.push('institutional');return [{hasPDF:true,title:'ICDE paper'}];}});
+    ui.switchPage('fulltext');await ui.getFullText(new AbortController().signal);
+    assert.deepEqual(calls,hasPDF?['generic']:['generic','institutional']);
+  }
+});
+
+test('failed IEEE address lookup preserves generic failure and does not attempt institutional download', async () => {
+  let institutionalCalls = 0;
+  const item = {id:1,libraryID:1,isRegularItem:()=>true,getField:f=>f==='extra'?'Source ID: icde:2025:1':f==='url'?'https://ieee-icde.org/2025/research-papers/':'ICDE paper'};
+  const ui = workflowUI({getActiveZoteroPane:()=>({getSelectedItems:()=>[item]}),Libraries:{get:()=>({filesEditable:true})}},
+    {async findPDFs(){return [{hasPDF:false,title:'ICDE paper',error:'Zotero 原生全文查找：未找到可用全文'}];}},
+    {context:{id:1},status:'test',async resolvePaperURL(){throw new Error('IEEE 地址补全：未找到匹配记录');},async download(){institutionalCalls++;}});
+  ui.switchPage('fulltext');await ui.getFullText(new AbortController().signal);
+  assert.equal(institutionalCalls,0);
+  assert.match(ui.lastPDFs[0].error,/IEEE 地址补全：未找到匹配记录/);
+  assert.match(ui.lastPDFs[0].error,/Zotero 原生全文查找/);
+});
+
+test('full-text flow resolves a missing IEEE URL then continues with login or native retrieval',async()=>{
+  for (const loggedIn of [true,false]) {
+    const calls=[],fields={title:'ICDE paper',extra:'Source ID: icde:2025:1',url:'https://ieee-icde.org/2025/research-papers/'};
+    const item={id:1,libraryID:1,isRegularItem:()=>true,getField:f=>fields[f]||''};
+    const ui=workflowUI({getActiveZoteroPane:()=>({getSelectedItems:()=>[item]}),Libraries:{get:()=>({filesEditable:true})}},
+      {async findPDFs(){calls.push('generic');return [{title:fields.title,hasPDF:calls.length>1}];}},
+      {context:loggedIn?{id:1}:null,status:'test',async resolvePaperURL(){calls.push('resolve');fields.url='https://ieeexplore.ieee.org/document/11113091/';},
+        async download(){calls.push('institutional');return [{title:fields.title,hasPDF:true}];}});
+    await ui.getFullText(new AbortController().signal);
+    assert.deepEqual(calls,['generic','resolve',loggedIn?'institutional':'generic']);assert.equal(ui.lastPDFs[0].hasPDF,true);
+  }
+});
+
+test('CCF filters use the existing 2026 catalogue and intersect without adding sources',()=>{
+  const catalog=JSON.parse(readFileSync(require.resolve('../code/ccf_venues.json'),'utf8')).venues;
+  assert.deepEqual(Object.keys(core.CONFERENCE_CATEGORIES),core.CONFERENCES);
+  for(const name of core.CONFERENCES){
+    const entry=catalog.find(v=>v.abbreviation===(name==='KDD'?'SIGKDD':name)&&v.type==='会议'&&(name!=='FSE'||v.category==='A'));
+    assert.deepEqual(core.CONFERENCE_CATEGORIES[name],{field:entry.professional_field,type:entry.type,rank:entry.category});
+  }
+  assert.deepEqual(core.filterConferences(),core.CONFERENCES);
+  assert.deepEqual(core.filterConferences({field:'人工智能',type:'会议',rank:'B'}),['EMNLP','ECCV']);
+  assert.deepEqual(core.filterConferences({field:'网络与信息安全',rank:'A'}),['CRYPTO','EUROCRYPT','USENIX Security','CCS','NDSS']);
+  assert.deepEqual(core.filterConferences({field:'数据库/数据挖掘/内容检索'}),['ICDE','SIGMOD','KDD','SIGIR','VLDB']);
+  assert.deepEqual(core.filterConferences({type:'期刊'}),[]);
+  assert.deepEqual(core.filterConferences({rank:'C'}),[]);
+});
+
+test('conference filters retain compatible selection and results, and disable searches for empty combinations',()=>{
+  const ui=workflowUI(),select=ui.$('conference');
+  select.options=[];select.add=o=>select.options.push(o);select.replaceChildren=()=>{select.options=[];};
+  select.value='ICML';ui.loadedConference='ICML';ui.filtersDirty=false;
+  const paper={id:'existing'};ui.papers=ui.candidates=[paper];ui.active=paper;ui.selected.add(paper.id);
+  ui.$('venue-field').value='人工智能';ui.updateConferenceOptions();
+  assert.equal(select.value,'ICML');assert.equal(ui.filtersDirty,false);
+  ui.$('venue-rank').value='B';ui.updateConferenceOptions();
+  assert.deepEqual(select.options.map(o=>o.value),['EMNLP','ECCV']);
+  assert.equal(select.value,'EMNLP');assert.equal(ui.filtersDirty,true);
+  assert.equal(ui.active,paper);assert.equal(ui.candidates[0],paper);assert.equal(ui.selected.has(paper.id),true);
+  ui.$('venue-type').value='期刊';ui.updateConferenceOptions();
+  assert.equal(select.value,'');assert.equal(select.disabled,true);
+  assert.equal(ui.$('fetch').disabled,true);assert.equal(ui.$('refresh-papers').disabled,true);
+  assert.equal(ui.$('import').disabled,true);assert.match(ui.$('venue-summary').textContent,/暂无已支持来源/);
+  ui.$('venue-type').value='会议';ui.updateConferenceOptions();
+  assert.equal(select.value,'EMNLP');assert.equal(select.disabled,false);assert.equal(ui.$('fetch').disabled,false);
+});
+
+test('saved OpenReview items recover direct PDFs without any recent import or cached paper metadata',async()=>{
+  for (const fields of [{url:'https://openreview.net/forum?id=Note_123-abc'},
+    {url:'https://openreview.net/pdf?id=Note_123-abc'},
+    {extra:'Other metadata\nOpenReview ID: Note_123-abc\n'}]) {
+    // Each fixture loads a fresh import module, modelling reopening the plugin.
+    const f=pdfFixture([()=>true],{direct:false,...fields});
+    const result=await f.run();
+    assert.equal(result[0].hasPDF,true);
+    assert.deepEqual(f.calls,['https://openreview.net/pdf?id=Note_123-abc']);
+  }
+});
+test('recovered OpenReview direct failure is reported before native failure; existing attachment is reused',async()=>{
+  const url='https://openreview.net/forum?id=Note123';
+  const f=pdfFixture([rejectPDF,()=>false],{direct:false,url});
+  const result=await f.run();
+  assert.deepEqual(f.calls,['https://openreview.net/pdf?id=Note123','resolve','https://example.org/native.pdf']);
+  assert.match(result[0].error,/直接下载：HTTP 403.*Zotero 原生全文查找/);
+  const existing=pdfFixture([],{direct:false,url,existing:true});
+  assert.equal((await existing.run())[0].hasPDF,true);assert.deepEqual(existing.calls,[]);
+});
+test('OpenReview recovery rejects unrelated hosts and malformed IDs; saved identity takes precedence over transient PDF URLs',async()=>{
+  for(const url of ['https://openreview.net.example.org/forum?id=123','https://other.org/forum?id=123',
+    'https://user@openreview.net/forum?id=123','https://openreview.net/forum?id=bad%26id','https://openreview.net/group?id=123']) {
+    const f=pdfFixture([()=>true],{direct:false,url});await f.run();
+    assert.deepEqual(f.calls,['resolve','https://example.org/native.pdf']);
+  }
+  const f=pdfFixture([()=>true],{url:'https://openreview.net/forum?id=StableID'});await f.run();
+  assert.deepEqual(f.calls,['https://openreview.net/pdf?id=StableID']);
 });

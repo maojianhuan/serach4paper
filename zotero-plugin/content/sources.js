@@ -368,6 +368,86 @@ var Search4PaperSources = (() => {
     return papers;
   }
 
+  function parseICDE(raw, year, sourceURL = `https://ieee-icde.org/${year}/research-papers/`) {
+    const doc = html(raw);
+    const heading = [...doc.querySelectorAll("h1, h2")].find(node =>
+      text(node) === "Research Papers" || text(node) === `Accepted Research Papers for ICDE ${year}`);
+    if (!heading || !new RegExp(`\\bICDE ${year}\\b`).test(text(doc.title ? doc.querySelector("title") : doc.body) + " " + text(heading))
+      || !/<\/html>\s*$/i.test(raw)) throw new Error(`ICDE ${year} 研究论文页面的年份或结构无法确认。`);
+    const cleanAuthor = name => name.replace(/\*+$/g, "").trim();
+    const make = (number, titleNode, authors, containers) => {
+      const title = text(titleNode).replace(/^\d+\s*\|\s*/, "");
+      const links = containers.flatMap(node => [...node.querySelectorAll("a[href]")]).map(a =>
+        ({ label: text(a), url: new URL(a.getAttribute("href"), sourceURL) }));
+      if (links.some(({url}) => !["http:", "https:"].includes(url.protocol))) throw new Error("ICDE 论文包含无效链接。");
+      const single = (values, field) => {
+        const unique = [...new Set(values)];
+        if (unique.length > 1) throw new Error(`ICDE 论文 ${number} 的 ${field} 不唯一。`);
+        return unique[0] || "";
+      };
+      const doi = single(links.filter(({url}) => ["doi.org", "dx.doi.org"].includes(url.hostname))
+        .map(({url}) => decodeURIComponent(url.pathname.slice(1))), "DOI");
+      const ieeeURL = single(links.filter(({url}) => url.hostname === "ieeexplore.ieee.org"
+        && /^\/(?:abstract\/)?document\/\d+\/?$/.test(url.pathname)).map(({url}) => url.href), "IEEE URL");
+      const pdfURL = single(links.filter(({url,label}) => /\.pdf$/i.test(url.pathname) || /^pdf$/i.test(label))
+        .map(({url}) => url.href), "PDF URL");
+      const detail = titleNode.querySelector("a[href]");
+      const detailURL = detail ? new URL(detail.getAttribute("href"), sourceURL).href : "";
+      return paper("ICDE", year, "icde", { id: `${year}:${Number(number)}`, title, authors,
+        sourceURL, detailURL, ieeeURL, doi, pdfURL, url: ieeeURL || detailURL || sourceURL });
+    };
+    let papers;
+    const lists = [...doc.querySelectorAll("ul.paper-list")];
+    if (lists.length) {
+      if (lists.length !== 1 || year !== 2026 || !text(heading).includes(String(year))) throw new Error("ICDE 论文列表结构不明确。");
+      const rows = [...lists[0].children];
+      papers = rows.map((row, index) => {
+        const number = text(row.querySelector(".number-column"));
+        if (!row.matches("li.paper-item") || !/^\d+$/.test(number) || Number(number) !== index + 1
+          || row.querySelectorAll(".title").length !== 1 || !row.querySelector(".authors")) {
+          throw new Error("ICDE 论文列表存在缺失、重复编号或无法识别的条目。");
+        }
+        return make(number, row.querySelector(".title"), [...row.querySelectorAll(".authors .author-name")]
+          .map(node => cleanAuthor(text(node))), [row]);
+      });
+    }
+    else {
+      // The existing project uses the 2025 official numbered title / semicolon-author layout.
+      if (year !== 2025) throw new Error(`ICDE ${year} 的官方研究论文页面格式尚未适配。`);
+      const titles = [...doc.querySelectorAll("p")].filter(node => /^\d+\s*\|/.test(text(node)));
+      papers = titles.map(node => {
+        const match = text(node).match(/^(\d+)\s*\|\s*(.+)$/);
+        const next = node.nextElementSibling, authorText = text(next);
+        if (!match || next?.localName !== "p" || !authorText || /^\d+\s*\|/.test(authorText)) {
+          throw new Error("ICDE 编号论文缺少标题或作者行。");
+        }
+        const authors = authorText.split(";").map(name => cleanAuthor(name.split("(")[0].trim()));
+        return make(match[1], node, authors, [node, next]);
+      });
+    }
+    if (!papers.length) throw unavailable("ICDE", year);
+    if (new Set(papers.map(p => p.id)).size !== papers.length) throw new Error("ICDE 论文编号重复。");
+    return papers;
+  }
+
+  async function fetchICDE(year, { request, signal }) {
+    let sourceURL = `https://ieee-icde.org/${year}/research-papers/`;
+    let raw = await request(sourceURL, signal, "text");
+    signal?.throwIfAborted();
+    // The official 2026 URL redirects to its new site's homepage, not its paper list.
+    // Follow only that site's explicit accepted-research-paper navigation.
+    if (year === 2026 && !html(raw).querySelector("ul.paper-list")) {
+      const link = [...html(raw).querySelectorAll("a[href]")].find(a =>
+        text(a) === "Accepted Research Papers" && new URL(a.getAttribute("href"), "https://icde2026.github.io/").href
+          === "https://icde2026.github.io/accepted-papers.html");
+      if (!link) throw new Error("ICDE 2026 官方页面缺少已录用研究论文入口。");
+      sourceURL = "https://icde2026.github.io/accepted-papers.html";
+      raw = await request(sourceURL, signal, "text");
+      signal?.throwIfAborted();
+    }
+    return parseICDE(raw, year, sourceURL);
+  }
+
   async function fetchAccepted(year, options) {
     const { conference, signal, request, onProgress = () => {} } = options;
     Search4PaperCore.venueID(conference, year);
@@ -383,6 +463,9 @@ var Search4PaperSources = (() => {
       papers = parseAnthology(raw, conference, year);
     }
     else if (["CRYPTO", "EUROCRYPT", "ASIACRYPT"].includes(conference)) papers = await fetchIACR(conference, year, settings);
+    else if (Search4PaperCore.SYSTEMS_SOURCES[conference]) papers = await Search4PaperSystemsSources.fetchAccepted(conference, year, settings);
+    else if (Search4PaperCore.DATABASE_SOURCES[conference]) papers = await Search4PaperDatabaseSources.fetchAccepted(conference, year, settings);
+    else if (conference === "ICDE") papers = await fetchICDE(year, settings);
     else if (conference === "ECCV") papers = await fetchECCV(year, settings);
     else if (conference === "AAAI") papers = await fetchAAAI(year, settings);
     else papers = await fetchCVF(conference, year, settings);
@@ -394,5 +477,5 @@ var Search4PaperSources = (() => {
     onProgress(papers.length, papers.length);
     return papers;
   }
-  return { fetchAccepted, parseAnthology, parseAAAIRecord, parseCVFIndex, parseECVAIndex, parseIACRIndex, completeIACRPaper };
+  return { fetchAccepted, parseICDE, parseAnthology, parseAAAIRecord, parseCVFIndex, parseECVAIndex, parseIACRIndex, completeIACRPaper };
 })();

@@ -1,9 +1,130 @@
 /* Pure retrieval/matching logic; also exercised by Node's built-in test runner. */
 var Search4PaperCore = (() => {
   const FIELDS = ["title", "abstract", "keywords", "tldr"];
-  const CONFERENCES = ["ICML", "NeurIPS", "ICLR", "AAAI", "ACL", "CVPR", "ICCV", "EMNLP", "ECCV", "CRYPTO", "EUROCRYPT", "ASIACRYPT"];
+  const CONFERENCES = ["ICML", "NeurIPS", "ICLR", "AAAI", "ACL", "CVPR", "ICCV", "EMNLP", "ECCV", "CRYPTO", "EUROCRYPT", "ASIACRYPT", "ICDE", "SIGMOD", "KDD", "SIGIR", "VLDB", "FAST", "NSDI", "OSDI", "USENIX Security", "CCS", "NDSS", "SIGCOMM", "FSE"];
+  // CCF 2026: supported subset of code/ccf_venues.json; https://ccf.atom.im/
+  const CONFERENCE_CATEGORIES = {
+    "ICML": {
+      "field": "人工智能",
+      "type": "会议",
+      "rank": "A"
+    },
+    "NeurIPS": {
+      "field": "人工智能",
+      "type": "会议",
+      "rank": "A"
+    },
+    "ICLR": {
+      "field": "人工智能",
+      "type": "会议",
+      "rank": "A"
+    },
+    "AAAI": {
+      "field": "人工智能",
+      "type": "会议",
+      "rank": "A"
+    },
+    "ACL": {
+      "field": "人工智能",
+      "type": "会议",
+      "rank": "A"
+    },
+    "CVPR": {
+      "field": "人工智能",
+      "type": "会议",
+      "rank": "A"
+    },
+    "ICCV": {
+      "field": "人工智能",
+      "type": "会议",
+      "rank": "A"
+    },
+    "EMNLP": {
+      "field": "人工智能",
+      "type": "会议",
+      "rank": "B"
+    },
+    "ECCV": {
+      "field": "人工智能",
+      "type": "会议",
+      "rank": "B"
+    },
+    "CRYPTO": {
+      "field": "网络与信息安全",
+      "type": "会议",
+      "rank": "A"
+    },
+    "EUROCRYPT": {
+      "field": "网络与信息安全",
+      "type": "会议",
+      "rank": "A"
+    },
+    "ASIACRYPT": {
+      "field": "网络与信息安全",
+      "type": "会议",
+      "rank": "B"
+    },
+    "ICDE": {
+      "field": "数据库/数据挖掘/内容检索",
+      "type": "会议",
+      "rank": "A"
+    }
+  };
+  for (const name of ["SIGMOD", "KDD", "SIGIR", "VLDB"]) {
+    CONFERENCE_CATEGORIES[name] = { field: "数据库/数据挖掘/内容检索", type: "会议", rank: "A" };
+  }
+  // Explicitly verified 2025 mappings; never extrapolate publication/calendar years.
+  const DATABASE_SOURCES = {
+    SIGMOD: { 2025: { sourceURL: "https://sigmodconf.hosting.acm.org/2025/sigmod_papers.shtml", rounds: ["round4", "round3", "round2", "round1"] } },
+    KDD: { 2025: { sourceURL: "https://kdd.org/kdd2025/research-track-papers-2/",
+      cycles: ["KDD.org/2025/Research_Track_August", "KDD.org/2025/Research_Track_February"],
+      acceptedVenues: ["KDD 2025 Research Track August", "KDD 2025 Research Track February"] } },
+    SIGIR: { 2025: { sourceURL: "https://sigir2025.dei.unipd.it/accepted-papers.html", tracks: ["full-papers", "short-papers"] } },
+    VLDB: { 2025: { sourceURL: "https://www.vldb.org/pvldb/volumes/18/", volume: 18,
+      issues: [1,2,3,4,5,6,7,8,9,10,11],
+      mappingURL: "https://www.vldb.org/pvldb/vol18/FrontMatterVol18No12.pdf" } }
+  };
+  // Verified official 2025 sources only. Security cycle links are discovered on its official homepage.
+  const SYSTEMS_SOURCES = {
+    "FAST": { 2025: { sourceURL: "https://www.usenix.org/conference/fast25/technical-sessions", usenix: true } },
+    "NSDI": { 2025: { sourceURL: "https://www.usenix.org/conference/nsdi25/technical-sessions", usenix: true } },
+    "OSDI": { 2025: { sourceURL: "https://www.usenix.org/conference/osdi25/technical-sessions", usenix: true } },
+    "USENIX Security": { 2025: { sourceURL: "https://www.usenix.org/conference/usenixsecurity25/technical-sessions", usenix: true } },
+    "CCS": { 2025: { sourceURL: "https://www.sigsac.org/ccs/CCS2025/accepted-papers/", dataURL: "https://www.sigsac.org/ccs/CCS2025/assets/accepted-papers.json", cycles: ["firstCycle", "secondCycle"] } },
+    "NDSS": { 2025: { sourceURL: "https://www.ndss-symposium.org/ndss2025/accepted-papers/", cycles: ["summer-cycle-2025", "fall-cycle-2025"] } },
+    "SIGCOMM": { 2025: { sourceURL: "https://conferences.sigcomm.org/sigcomm/2025/accepted-papers/" } },
+    "FSE": { 2025: { sourceURL: "https://conf.researchr.org/track/fse-2025/fse-2025-research-papers" } },
+  };
+  CONFERENCE_CATEGORIES["FAST"] = { field: "计算机体系结构/并行与分布计算/存储系统", type: "会议", rank: "A" };
+  CONFERENCE_CATEGORIES["NSDI"] = { field: "计算机网络", type: "会议", rank: "A" };
+  CONFERENCE_CATEGORIES["OSDI"] = { field: "软件工程/系统软件/程序设计语言", type: "会议", rank: "A" };
+  CONFERENCE_CATEGORIES["USENIX Security"] = { field: "网络与信息安全", type: "会议", rank: "A" };
+  CONFERENCE_CATEGORIES["CCS"] = { field: "网络与信息安全", type: "会议", rank: "A" };
+  CONFERENCE_CATEGORIES["NDSS"] = { field: "网络与信息安全", type: "会议", rank: "A" };
+  CONFERENCE_CATEGORIES["SIGCOMM"] = { field: "计算机网络", type: "会议", rank: "A" };
+  CONFERENCE_CATEGORIES["FSE"] = { field: "软件工程/系统软件/程序设计语言", type: "会议", rank: "A" };
+  function filterConferences({ field = "", type = "", rank = "" } = {}) {
+    return CONFERENCES.filter(name => {
+      const venue = CONFERENCE_CATEGORIES[name];
+      return (!field || venue.field === field) && (!type || venue.type === type) && (!rank || venue.rank === rank);
+    });
+  }
   const OPENREVIEW_CONFERENCES = ["ICML", "NeurIPS", "ICLR"];
   const CONFERENCE_NAMES = {
+    "FAST": "USENIX Conference on File and Storage Technologies (FAST)",
+    "NSDI": "USENIX Symposium on Networked Systems Design and Implementation (NSDI)",
+    "OSDI": "USENIX Symposium on Operating Systems Design and Implementation (OSDI)",
+    "USENIX Security": "USENIX Security Symposium",
+    "CCS": "ACM Conference on Computer and Communications Security",
+    "NDSS": "Network and Distributed System Security Symposium (NDSS)",
+    "SIGCOMM": "ACM SIGCOMM Conference",
+    "FSE": "ACM International Conference on the Foundations of Software Engineering (FSE)",
+
+    SIGMOD: "ACM SIGMOD Conference",
+    KDD: "ACM SIGKDD Conference on Knowledge Discovery and Data Mining",
+    SIGIR: "International ACM SIGIR Conference on Research and Development in Information Retrieval",
+    VLDB: "International Conference on Very Large Data Bases",
+    ICDE: "IEEE International Conference on Data Engineering",
     ICML: "International Conference on Machine Learning",
     NeurIPS: "Advances in Neural Information Processing Systems",
     ICLR: "International Conference on Learning Representations",
@@ -18,6 +139,10 @@ var Search4PaperCore = (() => {
     EMNLP: "Conference on Empirical Methods in Natural Language Processing"
   };
   function sourceName(conference) {
+    if (SYSTEMS_SOURCES[conference]) return `${conference} Official Research Papers`;
+    if (DATABASE_SOURCES[conference]) return conference === "VLDB" ? "PVLDB Official Research Papers"
+      : conference === "KDD" ? "KDD Research Track (OpenReview / Official List)" : `${conference} Official Research Papers`;
+    if (conference === "ICDE") return "ICDE Official Research Papers";
     if (OPENREVIEW_CONFERENCES.includes(conference)) return "OpenReview";
     if (["CRYPTO", "EUROCRYPT", "ASIACRYPT"].includes(conference)) return "IACR CryptoDB";
     if (conference === "ECCV") return "ECVA Open Access";
@@ -149,9 +274,50 @@ var Search4PaperCore = (() => {
       }
       if (ids.has(paper.id)) throw new Error("本地元数据包含重复的论文 ID。");
       ids.add(paper.id);
+      if (SYSTEMS_SOURCES[conference]) {
+        const config = SYSTEMS_SOURCES[conference][year], provenance = paper.sourceMetadata;
+        if (!config || paper.source !== conference.toLowerCase().replace(/ /g, "-") || !paper.authors.length
+          || paper.sourceURL !== config.sourceURL || !paper.id.startsWith(`${year}:`)
+          || !provenance || !["final-program", "accepted-cycles", "accepted-papers"].includes(provenance.mode)
+          || !Array.isArray(provenance.urls) || !provenance.urls.length
+          || provenance.urls.some(url => {
+            if (url === config.sourceURL || url === config.dataURL) return false;
+            const base = config.sourceURL.replace(/technical-sessions$/, "");
+            return conference !== "USENIX Security" || !url.startsWith(base)
+              || !/^(cycle\d+|summer|fall|winter)-accepted-papers$/.test(url.slice(base.length));
+          })) throw new Error(`${conference} 缓存来源或年份归属异常。`);
+        continue;
+      }
+      if (DATABASE_SOURCES[conference]) {
+        const config = DATABASE_SOURCES[conference][year];
+        const safeURL = value => typeof value === "string" && (!value || (URL.canParse(value)
+          && ["https:", "http:"].includes(new URL(value).protocol) && !new URL(value).username && !new URL(value).password));
+        if (!config || paper.source !== conference.toLowerCase() || !paper.authors.length
+            || paper.sourceURL !== config.sourceURL || JSON.stringify(paper.sourceMetadata) !== JSON.stringify(config)
+            || ![paper.url, paper.pdfURL, paper.detailURL || ""].every(safeURL)
+            || !paper.id.startsWith(`${year}:`)) throw new Error(`${conference} 缓存来源或年份归属异常。`);
+        if (conference === "KDD" && (!paper.cycles?.length || paper.cycles.some(c => !config.cycles.includes(c)))) {
+          throw new Error("KDD 缓存混入了其他周期或赛道。");
+        }
+        if (conference === "VLDB" && (paper.volume !== config.volume || !config.issues.includes(paper.issue))) {
+          throw new Error("VLDB 缓存包含其他会议年度的 PVLDB 论文。");
+        }
+        continue;
+      }
       const source = OPENREVIEW_CONFERENCES.includes(conference) ? "openreview"
-        : conference === "AAAI" ? "aaai" : ["ACL", "EMNLP"].includes(conference) ? "acl" : conference === "ECCV" ? "ecva" : ["CRYPTO", "EUROCRYPT", "ASIACRYPT"].includes(conference) ? "iacr" : "cvf";
-      const sourceURL = source === "openreview" ? `https://openreview.net/forum?id=${encodeURIComponent(paper.id)}`
+        : conference === "ICDE" ? "icde" : conference === "AAAI" ? "aaai" : ["ACL", "EMNLP"].includes(conference) ? "acl" : conference === "ECCV" ? "ecva" : ["CRYPTO", "EUROCRYPT", "ASIACRYPT"].includes(conference) ? "iacr" : "cvf";
+      if (source === "icde") {
+        const official = `https://ieee-icde.org/${year}/research-papers/`;
+        const validURL = value => typeof value === "string" && (!value || (URL.canParse(value)
+          && ["https:", "http:"].includes(new URL(value).protocol) && !new URL(value).username && !new URL(value).password));
+        if (!new RegExp(`^${year}:\\d+$`).test(paper.id) || !paper.authors.length
+          || ![official, ...(year === 2026 ? ["https://icde2026.github.io/accepted-papers.html"] : [])].includes(paper.sourceURL)
+          || !validURL(paper.detailURL) || !validURL(paper.ieeeURL)
+          || (paper.ieeeURL && new URL(paper.ieeeURL).hostname !== "ieeexplore.ieee.org")) {
+          throw new Error("ICDE 本地元数据的来源、年份或论文链接异常。");
+        }
+      }
+      const sourceURL = source === "icde" ? paper.ieeeURL || paper.detailURL || paper.sourceURL : source === "openreview" ? `https://openreview.net/forum?id=${encodeURIComponent(paper.id)}`
         : source === "aaai" ? `https://ojs.aaai.org/index.php/AAAI/article/view/${paper.id}`
         : source === "iacr" ? `https://www.iacr.org/cryptodb/data/paper.php?pubkey=${paper.id}`
         : source === "acl" ? `https://aclanthology.org/${paper.id}/` : source === "ecva" ? `https://www.ecva.net${paper.id}` : `https://openaccess.thecvf.com${paper.id}`;
@@ -227,7 +393,7 @@ var Search4PaperCore = (() => {
     for (const line of (data.extra || "").split("\n")) {
       if (line.startsWith("OpenReview ID: ")) keys.add("openreview:" + line.slice(15).trim());
       if (line.startsWith("DOI: ")) addDOI(line.slice(5));
-      if (/^Source ID: (aaai|acl|cvf|ecva|iacr):/.test(line)) keys.add("source:" + line.slice(11).trim());
+      if (/^Source ID: (aaai|acl|cvf|ecva|iacr|icde|sigmod|kdd|sigir|vldb|fast|nsdi|osdi|usenix-security|ccs|ndss|sigcomm|fse):/.test(line)) keys.add("source:" + line.slice(11).trim());
     }
     return keys;
   }
@@ -240,11 +406,34 @@ var Search4PaperCore = (() => {
       `Keywords: ${query.terms.join("; ")}`, `Match: ${query.operator}`,
       `Fields: ${query.fields.join(", ")}`,
       ...(paper.evidence || []).map(hit => `[${hit.field}] ${hit.term}: ${hit.text}`)];
+    if (paper.source === "icde") {
+      lines.push(`Official source: ${paper.sourceURL}`);
+      if (paper.detailURL) lines.push(`Paper detail: ${paper.detailURL}`);
+      if (paper.ieeeURL) lines.push(`IEEE Xplore: ${paper.ieeeURL}`);
+      if (paper.pdfURL) lines.push(`PDF: ${paper.pdfURL}`);
+    }
+    if (["sigmod", "kdd", "sigir", "vldb"].includes(paper.source)) {
+      lines.push(`Official source: ${paper.sourceURL}`, `Track: ${paper.track || "Research"}`);
+      if (paper.detailURL) lines.push(`Paper detail: ${paper.detailURL}`);
+      if (paper.pdfURL) lines.push(`PDF: ${paper.pdfURL}`);
+      if (paper.cycles) lines.push(`Research cycles: ${paper.cycles.join("; ")}`);
+      if (paper.rounds) lines.push(`Acceptance rounds: ${paper.rounds.join("; ")}`);
+      if (paper.source === "vldb") lines.push(`Conference mapping: ${paper.sourceMetadata.mappingURL}`, `PVLDB: volume ${paper.volume}, issue ${paper.issue}`);
+      if (paper.retrievalWarning) lines.push(paper.retrievalWarning);
+    }
+    if (Object.keys(SYSTEMS_SOURCES).some(c => c.toLowerCase().replace(/ /g, "-") === paper.source)) {
+      lines.push(`Official source: ${paper.sourceURL}`, `Track: ${paper.track}`, `List: ${paper.sourceMetadata.mode}`,
+        `List sources: ${paper.sourceMetadata.urls.join("; ")}`);
+      if (paper.cycles) lines.push(`Acceptance cycles: ${paper.cycles.join("; ")}`);
+      if (paper.detailURL) lines.push(`Paper detail: ${paper.detailURL}`);
+      if (paper.pdfURL) lines.push(`PDF: ${paper.pdfURL}`);
+      if (paper.retrievalWarning) lines.push(paper.retrievalWarning);
+    }
     if (paper.bibtex) lines.push("Source BibTeX:", paper.bibtex);
     return lines.map(line => `<p>${escapeHTML(line)}</p>`).join("");
   }
 
-  return { FIELDS, CONFERENCES, OPENREVIEW_CONFERENCES, CONFERENCE_NAMES, sourceName, venueID, words, phraseMatches, splitTerms, validateQuery, matchPaper, normalizeNote,
+  return { FIELDS, SYSTEMS_SOURCES, DATABASE_SOURCES, CONFERENCES, CONFERENCE_CATEGORIES, filterConferences, OPENREVIEW_CONFERENCES, CONFERENCE_NAMES, sourceName, venueID, words, phraseMatches, splitTerms, validateQuery, matchPaper, normalizeNote,
     validateYear, validateMetadata, fetchAccepted, identities, evidenceNote };
 })();
 if (typeof module !== "undefined") module.exports = Search4PaperCore;

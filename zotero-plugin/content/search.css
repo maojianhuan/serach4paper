@@ -15,7 +15,8 @@ label { display: flex; align-items: center; gap: 5px; }
 input:not([type=checkbox]), select { width: 100%; min-width: 0; margin: 0; border: 1px solid color-mix(in srgb, CanvasText 28%, Canvas); border-radius: 5px; background-color: Field; color: FieldText; padding: 7px; font: inherit; }
 select { padding-inline-end: 32px; }
 #year { width: 90px; }
-#conference { width: 100px; }
+#conference { width: 145px; }
+.venue-filters select { width: auto; }
 #operator { width: 165px; }
 button { color: ButtonText; background: ButtonFace; border: 1px solid color-mix(in srgb, CanvasText 25%, Canvas); border-radius: 5px; padding: 7px 10px; font: inherit; cursor: pointer; }
 button:hover:not(:disabled) { background: color-mix(in srgb, Highlight 12%, Canvas); }
@@ -25,7 +26,7 @@ button.primary:hover:not(:disabled) { background: #1e50a3; }
 .query > button, .destination > button { align-self: flex-end; }
 .hint { font-size: 12px; line-height: 1.5; }
 .coverage { font-size: 12px; padding: 7px 10px; background: color-mix(in srgb, Highlight 9%, Canvas); border-radius: 4px; }
-.workspace { flex: 1; min-height: 220px; display: grid; grid-template-columns: 1.08fr 1fr; border: 1px solid color-mix(in srgb, CanvasText 20%, Canvas); border-radius: 6px; overflow: hidden; }
+.workspace { flex: 1; min-height: 180px; display: grid; grid-template-columns: 1.08fr 1fr; border: 1px solid color-mix(in srgb, CanvasText 20%, Canvas); border-radius: 6px; overflow: hidden; }
 .candidates { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .toolbar { padding: 8px; gap: 7px; flex-wrap: wrap; font-size: 12px; }
 .toolbar button, .pagination button { padding: 4px 7px; font-size: 12px; }
@@ -47,6 +48,11 @@ h3 { font-size: 13px; margin: 16px 0 8px; }
 #evidence li { margin-bottom: 9px; }
 .preview > p { margin-bottom: 8px; }
 footer { justify-content: space-between; }
-#status { min-height: 20px; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 90px; overflow: auto; }
-#status.error { color: light-dark(#ac2525, #ff9999); }
+.operation-status { min-height: 20px; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 90px; overflow: auto; }
+.operation-status.error { color: light-dark(#ac2525, #ff9999); }
 @media (max-width: 900px) { body { padding: 10px; gap: 7px; } .query, .destination { gap: 6px; } button { padding: 6px; } }
+
+.workflow-page { display: flex; flex-direction: column; flex: 1; min-height: 0; gap: 10px; }
+[hidden] { display: none !important; }
+[role=tab][aria-selected=true] { border-color: #245fc0; background: color-mix(in srgb, Highlight 12%, Canvas); }
+#page-fulltext .operation-status { max-height: none; flex: 1; }
