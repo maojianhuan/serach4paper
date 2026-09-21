@@ -24,14 +24,20 @@ var IEEELogin = {
       if (this.browser.canGoBack) this.browser.goBack();
     });
     document.getElementById("close-popup").addEventListener("command", () => this.closeBrowser(this.browser));
+    let initialURL = "https://ieeexplore.ieee.org/";
+    if (window.arguments[0].publisher === "ACM") {
+      initialURL = window.arguments[0].initialURL;
+      if (!/^https:\/\/dl\.acm\.org\/doi\/10\.1145\/\d+(?:\.\d+)*$/.test(initialURL)) throw new Error("无效的 ACM 验证页面。");
+      document.title = "ACM 访问验证";
+    }
     const browser = this.createBrowser();
-    browser.loadURI(Services.io.newURI("https://ieeexplore.ieee.org/"), {
+    browser.loadURI(Services.io.newURI(initialURL), {
       triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal()
     });
   },
   createBrowser(openWindowInfo) {
     if (openWindowInfo && openWindowInfo.originAttributes.userContextId !== this.userContextId) {
-      throw new Error("IEEE 登录弹出页的 Cookie 上下文不一致。");
+      throw new Error("访问窗口弹出页的 Cookie 上下文不一致。");
     }
     const browser = document.createXULElement("browser");
     browser.setAttribute("type", "content");

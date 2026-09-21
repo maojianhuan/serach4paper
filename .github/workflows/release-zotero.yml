@@ -41,7 +41,7 @@ jobs:
           PY
 
       - name: Test plugin logic
-        run: node --test tests/test_zotero_plugin.cjs tests/test_zotero_ieee.cjs tests/test_zotero_database.cjs tests/test_zotero_systems.cjs
+        run: node --test tests/test_zotero_plugin.cjs tests/test_zotero_ieee.cjs tests/test_zotero_database.cjs tests/test_zotero_systems.cjs tests/test_zotero_acm.cjs
 
       - name: Build XPI from the tagged source
         run: python3 zotero-plugin/build.py

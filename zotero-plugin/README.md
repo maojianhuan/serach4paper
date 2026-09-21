@@ -11,6 +11,8 @@
 - **论文检索**：选择会议、年份，输入关键词；分号分隔词组，AND 全部满足，OR 任一满足。勾选的查找字段取并集。点击标题预览，勾选论文后导入目标集合，可新建子集合并添加标签。
 - **全文获取**：先在 Zotero 主窗口选中文献，再点击获取全文。IEEE 北航订阅访问需在插件窗口手动完成 SSO；同一会话复用 Cookie，机构下载逐篇进行，开始时间至少间隔 10 秒。全文不保证可得；失败时保留书目条目，已知限制见 [TODO](../TODO.md)。
 
+ACM 条目优先按 DOI 请求官方公开 PDF；遇到 403 时显示“ACM 访问验证”，在 Zotero 窗口中手动完成验证后，再点击“获取全文”。验证窗口与请求共享独立的临时 Cookie 会话，不保存登录信息。网站验证仍可能阻止后台下载，需在 Windows 上实测。
+
 元数据保存在 `<Zotero 数据目录>/search4paper/<会议>/<年份>.json`，支持离线筛选。点击“刷新名单”更新；失败或取消不会覆盖旧名单。缺失的摘要等字段保持为空。首次欢迎提示仅显示一次，状态保存在 Zotero profile 的 `extensions.search4paper.welcomeShown` 偏好中。
 
 ## 支持的来源和年份
@@ -51,7 +53,7 @@ KDD 周期为 `KDD.org/2025/Research_Track_August`、`KDD.org/2025/Research_Trac
 在仓库根目录运行：
 
 ```sh
-node --test tests/test_zotero_plugin.cjs tests/test_zotero_ieee.cjs tests/test_zotero_database.cjs tests/test_zotero_systems.cjs
+node --test tests/test_zotero_plugin.cjs tests/test_zotero_ieee.cjs tests/test_zotero_database.cjs tests/test_zotero_systems.cjs tests/test_zotero_acm.cjs
 python3 zotero-plugin/build.py
 ```
 

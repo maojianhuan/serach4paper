@@ -495,7 +495,7 @@ function workflowUI(Zotero = {}, importer = {}, ieee = {status: '尚未验证', 
     return elements.get(id);
   };
   const scope = {AbortController, Option: function(text,value){this.text=text;this.value=value;}, Search4PaperCore: core, Search4PaperImport: importer,
-    window: {arguments: [{Zotero, ieeeSession: ieee}], addEventListener() {}},
+    window: {arguments: [{Zotero, ieeeSession: ieee, acmSession: {canHandle:()=>false,status:'',verificationURL:''}}], addEventListener() {}},
     document: {getElementById: element, querySelectorAll: () => [...elements.values()]}};
   vm.runInNewContext(readFileSync(require.resolve('../zotero-plugin/content/search.js'), 'utf8'), scope);
   return scope.Search4PaperUI;
@@ -692,4 +692,18 @@ test('OpenReview recovery rejects unrelated hosts and malformed IDs; saved ident
   }
   const f=pdfFixture([()=>true],{url:'https://openreview.net/forum?id=StableID'});await f.run();
   assert.deepEqual(f.calls,['https://openreview.net/pdf?id=StableID']);
+});
+
+test('fulltext uses ACM public download first and exposes verification only after 403; other failures keep native fallback',async()=>{
+ const item={id:1,libraryID:1,isRegularItem:()=>true,getField:f=>({title:'TSINR',DOI:'10.1145/1.2',url:'https://dl.acm.org/doi/10.1145/1.2'})[f]||''};
+ for(const outcome of [{hasPDF:true},{hasPDF:false,verificationRequired:true,error:'ACM HTTP 403'},{hasPDF:false,error:'ACM HTTP 404'}]){
+  let native=0,acm=0;const ui=workflowUI({getActiveZoteroPane:()=>({getSelectedItems:()=>[item]}),Libraries:{get:()=>({filesEditable:true})}},
+   {findPDFs:async()=>{native++;return [{title:'TSINR',hasPDF:false,error:'native unavailable'}];}});
+  ui.acm={canHandle:()=>true,status:'ACM',verificationURL:outcome.verificationRequired?'https://dl.acm.org/doi/10.1145/1.2':'',
+   download:async()=>{acm++;return {title:'TSINR',...outcome};}};
+  ui.switchPage('fulltext');await ui.getFullText(new AbortController().signal);
+  assert.equal(acm,1);assert.equal(native,outcome.hasPDF||outcome.verificationRequired?0:1);
+  assert.equal(ui.$('acm-access').hidden,!outcome.verificationRequired);
+  if(native)assert.match(ui.lastPDFs[0].error,/ACM HTTP 404；native unavailable/);
+ }
 });

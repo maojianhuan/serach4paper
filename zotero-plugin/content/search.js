@@ -2,6 +2,7 @@
 var Search4PaperUI = {
   Zotero: window.arguments[0].Zotero,
   ieee: window.arguments[0].ieeeSession,
+  acm: window.arguments[0].acmSession,
   activePage: "search", operationPage: null,
   papers: [], candidates: [], selected: new Set(), active: null,
   page: 0, pageSize: 100, busy: false, controller: null, query: null, loadedYear: null, loadedConference: null, filtersDirty: true,
@@ -279,11 +280,17 @@ var Search4PaperUI = {
         // Use the existing institutional path only after the user explicitly starts login.
         let institutional = this.ieee.context && this.ieee.hasPaperURL(item.getField("url"));
         let result;
+        if (this.acm.canHandle(item)) {
+          result = await this.acm.download(item, { signal });
+          this.updateACMStatus();
+        }
+        const acmError = result?.error;
         const icde = /^Source ID: icde:/m.test(item.getField("extra"));
-        if (!institutional || icde) {
+        if (!result?.hasPDF && !result?.verificationRequired && !signal.aborted && (!institutional || icde)) {
           // ICDE is not assumed paywalled: try the existing direct/Zotero path first.
           const paper = this.lastImport?.results.find(r => r.item?.id === item.id)?.paper || { title };
           [result] = await Search4PaperImport.findPDFs(this.Zotero, [{ item, paper }], { signal });
+          if (acmError && result && !result.hasPDF) result.error = [acmError, result.error].filter(Boolean).join("；");
         }
         let resolutionError = "";
         if (!result?.hasPDF && !signal.aborted && !this.ieee.hasPaperURL(item.getField("url")) && this.ieee.canResolve(item)) {
@@ -319,6 +326,10 @@ var Search4PaperUI = {
     this.status(`全文获取：成功 ${outcomes.filter(r => r.hasPDF).length}，失败 ${outcomes.filter(r => !r.hasPDF).length}，未处理 ${items.length - outcomes.length}。文献条目已保留。${signal.aborted ? " 已取消后续处理。" : ""}\n`
       + outcomes.map(r => `${r.title}：${r.reused ? "复用已有 PDF" : r.hasPDF ? "附件已取得" : r.error || "未取得可用全文"}${r.startedAt ? `（请求开始 ${r.startedAt}）` : ""}`).join("\n"));
   },
+  updateACMStatus() {
+    this.$("acm-access").hidden = !this.acm.verificationURL;
+    this.$("acm-status").textContent = this.acm.status;
+  },
   init() {
     for (const page of ["search", "fulltext"]) {
       const tab = this.$("tab-" + page);
@@ -334,6 +345,11 @@ var Search4PaperUI = {
     this.$("ieee-login").addEventListener("click", () => this.operation(async () => {
       this.ieee.login();
       this.$("ieee-status").textContent = this.ieee.status;
+    }));
+    this.updateACMStatus();
+    this.$("acm-verify").addEventListener("click", () => this.operation(async () => {
+      this.acm.verify();
+      this.updateACMStatus();
     }));
     this.$("get-fulltext").addEventListener("click", () => this.operation(signal => this.getFullText(signal)));
     this.$("fulltext-cancel").addEventListener("click", () => {

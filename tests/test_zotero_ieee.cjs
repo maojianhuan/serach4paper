@@ -150,6 +150,13 @@ test('login browser and popup contexts retain cookie isolation and native naviga
   const popup=scope.IEEELogin.browser;scope.IEEELogin.closeBrowser(popup);
   assert.equal(popup.removed,true);assert.equal(appended[1].hidden,false);
   assert.throws(()=>window.browserDOMWindow.createContentWindow(null,{originAttributes:{userContextId:7}}),/Cookie 上下文不一致/);
+  window.arguments[0]={userContextId:42,publisher:'ACM',initialURL:'https://dl.acm.org/doi/10.1145/1.2'};
+  scope.IEEELogin.init();
+  assert.equal(loads.at(-1).uri,'https://dl.acm.org/doi/10.1145/1.2');assert.equal(document.title,'ACM 访问验证');
+  assert.equal(appended.at(-1).attributes.usercontextid,'42');
+  window.arguments[0].initialURL='https://example.org/doi/10.1145/1.2';
+  assert.throws(()=>scope.IEEELogin.init(),/无效的 ACM/);
+
 });
 
 test('login popup actor preserves native navigation and security features without window sizing', () => {

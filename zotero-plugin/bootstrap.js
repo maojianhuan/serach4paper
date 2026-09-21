@@ -1,6 +1,7 @@
 var chromeHandle;
 var searchWindow;
 var ieeeSession;
+var acmSession;
 var pluginRootURI;
 var welcomeWindow;
 var pluginActive = false;
@@ -31,6 +32,11 @@ function onMainWindowLoad({ window }) {
     Services.scriptloader.loadSubScript(pluginRootURI + "content/ieee.js", scope);
     ieeeSession = new scope.Search4PaperIEEE(Zotero, { now: () => Cu.now() });
   }
+  if (!acmSession) {
+    const scope = { Zotero, IOUtils, PathUtils, URL, AbortController: window.AbortController };
+    Services.scriptloader.loadSubScript(pluginRootURI + "content/acm.js", scope);
+    acmSession = new scope.Search4PaperACM(Zotero);
+  }
   const menu = window.document.createXULElement("menuitem");
   menu.id = "search4paper-open";
   menu.setAttribute("label", "search4paper：检索会议论文…");
@@ -41,7 +47,7 @@ function onMainWindowLoad({ window }) {
     }
     searchWindow = window.openDialog(
       "chrome://search4paper/content/search.xhtml", "search4paper",
-      "chrome,centerscreen,resizable,width=1120,height=800", { Zotero, ieeeSession }
+      "chrome,centerscreen,resizable,width=1120,height=800", { Zotero, ieeeSession, acmSession }
     );
   });
   window.document.getElementById("menu_ToolsPopup").appendChild(menu);
@@ -72,6 +78,8 @@ async function shutdown() {
   searchWindow = null;
   await ieeeSession?.dispose();
   ieeeSession = null;
+  await acmSession?.dispose();
+  acmSession = null;
   ChromeUtils.unregisterWindowActor("IEEELoginNavigation");
   for (const window of Zotero.getMainWindows()) onMainWindowUnload({ window });
   chromeHandle?.destruct();
