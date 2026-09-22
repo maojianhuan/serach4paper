@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "search4paper",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "按会议、年份和关键词检索论文，预览并导入 Zotero。",
   "applications": {
     "zotero": {

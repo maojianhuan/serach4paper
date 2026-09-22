@@ -14,7 +14,7 @@ label { display: flex; align-items: center; gap: 5px; }
 .grow { flex: 1; min-width: 0; }
 input:not([type=checkbox]), select { width: 100%; min-width: 0; margin: 0; border: 1px solid color-mix(in srgb, CanvasText 28%, Canvas); border-radius: 5px; background-color: Field; color: FieldText; padding: 7px; font: inherit; }
 select { padding-inline-end: 32px; }
-#year { width: 90px; }
+#year { width: 170px; }
 #conference { width: 145px; }
 .venue-filters select { width: auto; }
 #operator { width: 165px; }

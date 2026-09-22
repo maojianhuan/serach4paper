@@ -3,8 +3,8 @@
     "search4paper@local": {
       "updates": [
         {
-          "version": "0.1.5",
-          "update_link": "https://github.com/maojianhuan/serach4paper/releases/download/zotero-v0.1.5/search4paper-0.1.5.xpi",
+          "version": "0.1.6",
+          "update_link": "https://github.com/maojianhuan/serach4paper/releases/download/zotero-v0.1.6/search4paper-0.1.6.xpi",
           "applications": {
             "zotero": {
               "strict_min_version": "10.0",

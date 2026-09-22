@@ -16,7 +16,7 @@ const fetchWith = request => core.fetchAccepted(2026, { request });
 
 test('selecting current results enables import for all supported conferences', () => {
   const controls = new Map(['fetch', 'refresh-papers', 'conference', 'cancel', 'filter', 'import', 'select-page', 'clear',
-    'previous', 'next', 'source', 'tab-search', 'tab-fulltext', 'fulltext-cancel'].map(id => [id, {}]));
+    'enrich-abstracts', 'previous', 'next', 'source', 'tab-search', 'tab-fulltext', 'fulltext-cancel'].map(id => [id, {}]));
   const context = { window: { arguments: [{ Zotero: {} }], addEventListener() {} },
     document: { querySelectorAll: () => [...controls.values()] } };
   vm.runInNewContext(readFileSync(require.resolve('../zotero-plugin/content/search.js'), 'utf8'), context);
@@ -487,7 +487,7 @@ test('welcome does not open after shutdown or on a closed main window', async ()
 });
 
 function workflowUI(Zotero = {}, importer = {}, ieee = {status: '尚未验证', context: null}, arxiv = {resolve: async () => null},
-    publication = {isWWW:()=>false,resolveWWWDOI:async()=>''}, openreview = {URLs:async()=>[]}) {
+    publication = {isWWW:()=>false,resolveWWWDOI:async()=>''}, openreview = {URLs:async()=>[]}, abstract = {resolve:async()=>null}, environment = {}) {
   const ieeeScope = {URL};
   vm.runInNewContext(readFileSync(require.resolve('../zotero-plugin/content/ieee.js'),'utf8'),ieeeScope);
   for (const method of ['pdfURL','hasPaperURL','canResolve']) ieee[method] = ieeeScope.Search4PaperIEEE.prototype[method];
@@ -498,9 +498,9 @@ function workflowUI(Zotero = {}, importer = {}, ieee = {status: '尚未验证', 
     return elements.get(id);
   };
   const scope = {URL, AbortController, Option: function(text,value){this.text=text;this.value=value;}, Search4PaperCore: core, Search4PaperImport: importer,
-    Search4PaperArxiv: arxiv, Search4PaperPublication: publication, Search4PaperOpenReview: openreview,
+    Search4PaperArxiv: arxiv, Search4PaperPublication: publication, Search4PaperOpenReview: openreview, Search4PaperAbstract: abstract,
     window: {arguments: [{Zotero, ieeeSession: ieee, acmSession: {canHandle:()=>false,status:'',verificationURL:''}}], addEventListener() {}},
-    document: {getElementById: element, querySelectorAll: () => [...elements.values()]}};
+    document: {getElementById: element, querySelectorAll: () => [...elements.values()]},...environment};
   vm.runInNewContext(readFileSync(require.resolve('../zotero-plugin/content/search.js'), 'utf8'), scope);
   return scope.Search4PaperUI;
 }
@@ -572,8 +572,8 @@ test('search import creates bibliographic items without invoking PDF retrieval',
   let imported = false;
   const ui = workflowUI({}, {async papers(z, papers) {imported = true; return {results:[{paper: papers[0], item: {id:1}, status:'created'}],unprocessed:0};},
     findPDFs() {throw new Error('Search must not retrieve PDFs');}});
-  const paper = {id: 'one', title: 'Test'};
-  ui.candidates = [paper]; ui.selected.add(paper.id); ui.filtersDirty = false; ui.refreshCollections = () => {};
+  const paper = {id: 'one', title: 'Test',venueID:'Test/2026/Conference'};
+  ui.candidates = [paper]; ui.selected.add(ui.paperKey(paper)); ui.filtersDirty = false; ui.refreshCollections = () => {};
   await ui.importPapers(new AbortController().signal);
   assert.equal(imported, true); assert.match(ui.$('status').textContent, /新增 1/);
 });
@@ -653,20 +653,63 @@ test('CCF filters use the existing 2026 catalogue and intersect without adding s
 test('conference filters retain compatible selection and results, and disable searches for empty combinations',()=>{
   const ui=workflowUI(),select=ui.$('conference');
   select.options=[];select.add=o=>select.options.push(o);select.replaceChildren=()=>{select.options=[];};
-  select.value='ICML';ui.loadedConference='ICML';ui.filtersDirty=false;
+  Object.defineProperty(select,'selectedOptions',{get(){return this.options.filter(option=>option.selected);}});
+  select.value='ICML';ui.loadedTargets=[{conference:'ICML',year:2026}];ui.filtersDirty=false;
   const paper={id:'existing'};ui.papers=ui.candidates=[paper];ui.active=paper;ui.selected.add(paper.id);
   ui.$('venue-field').value='人工智能';ui.updateConferenceOptions();
   assert.equal(select.value,'ICML');assert.equal(ui.filtersDirty,false);
   ui.$('venue-rank').value='B';ui.updateConferenceOptions();
   assert.deepEqual(select.options.map(o=>o.value),['EMNLP','ECCV']);
-  assert.equal(select.value,'EMNLP');assert.equal(ui.filtersDirty,true);
+  assert.equal(ui.selectedConferences().join(','),'EMNLP');assert.equal(ui.filtersDirty,true);
   assert.equal(ui.active,paper);assert.equal(ui.candidates[0],paper);assert.equal(ui.selected.has(paper.id),true);
   ui.$('venue-type').value='期刊';ui.updateConferenceOptions();
-  assert.equal(select.value,'');assert.equal(select.disabled,true);
+  assert.equal(ui.selectedConferences().length,0);assert.equal(select.disabled,true);
   assert.equal(ui.$('fetch').disabled,true);assert.equal(ui.$('refresh-papers').disabled,true);
   assert.equal(ui.$('import').disabled,true);assert.match(ui.$('venue-summary').textContent,/暂无已支持来源/);
   ui.$('venue-type').value='会议';ui.updateConferenceOptions();
-  assert.equal(select.value,'EMNLP');assert.equal(select.disabled,false);assert.equal(ui.$('fetch').disabled,false);
+  assert.equal(ui.selectedConferences().join(','),'EMNLP');assert.equal(select.disabled,false);assert.equal(ui.$('fetch').disabled,false);
+});
+
+test('multi-conference and year-range selection forms the Cartesian target set with bounded validation',()=>{
+  const ui=workflowUI(),select=ui.$('conference');
+  select.selectedOptions=[{value:'ICML'},{value:'WWW'}];ui.$('year').value='2024; 2025-2026';
+  assert.equal(JSON.stringify(ui.selectedTargets()),JSON.stringify([
+    {conference:'ICML',year:2024},{conference:'ICML',year:2025},{conference:'ICML',year:2026},
+    {conference:'WWW',year:2024},{conference:'WWW',year:2025},{conference:'WWW',year:2026}
+  ]));
+  ui.$('year').value='2026-2024';assert.throws(()=>ui.selectedYears(),/递增/);
+  ui.$('year').value='2020-2031';assert.throws(()=>ui.selectedYears(),/最多跨 10 年/);
+});
+
+test('joint retrieval validates and combines every selected conference-year cache',async()=>{
+  const metadata=(conference,year,id)=>{const venueID=core.venueID(conference,year);return {schemaVersion:1,venueID,year,
+    fetchedAt:'2026-01-01T00:00:00Z',paperCount:1,papers:[{id,year,venueID,title:`${conference} ${year}`,authors:['Ada Example'],abstract:'',keywords:'',tldr:'',doi:'',url:`https://openreview.net/forum?id=${id}`,pdfURL:'',bibtex:''}]};};
+  const cache=new Map([['ICML/2025.json',metadata('ICML',2025,'same')],['WWW/2025.json',metadata('WWW',2025,'same')]]);
+  const ui=workflowUI({DataDirectory:{dir:'root'}},{},undefined,undefined,undefined,undefined,undefined,{
+    PathUtils:{join:(...parts)=>parts.slice(-2).join('/')},IOUtils:{exists:async path=>cache.has(path),readJSON:async path=>cache.get(path)},
+    Search4PaperSources:{fetchAccepted:async()=>{throw Error('cache should be used');}}
+  });
+  ui.$('conference').selectedOptions=[{value:'ICML'},{value:'WWW'}];ui.$('year').value='2025';
+  ui.readQuery=()=>({terms:['paper'],operator:'OR',fields:['title']});ui.render=()=>{};ui.preview=()=>{};ui.filterPapers=async()=>{};
+  await ui.fetchPapers(new AbortController().signal);
+  assert.equal(ui.papers.length,2);assert.equal(new Set(ui.papers.map(p=>ui.paperKey(p))).size,2);
+  assert.equal(ui.coverageRows.length,2);assert.equal(ui.loadedTargets.length,2);
+});
+
+test('abstract enrichment updates cache and an unambiguous existing Zotero item without replacing metadata',async()=>{
+  const fields={DOI:'10.1000/example',url:'',extra:'',abstractNote:''};let saves=0,written;
+  const item={isRegularItem:()=>true,deleted:false,getField:key=>fields[key]||'',setField:(key,value)=>{fields[key]=value;},saveTx:async()=>{saves++;}};
+  const Zotero={DataDirectory:{dir:'root'},Libraries:{userLibraryID:1},Items:{getAll:async()=>[item]}};
+  const abstract={resolve:async()=>({abstract:'Resolved abstract',source:'Semantic Scholar',sourceURL:'https://example.org/source'})};
+  const ui=workflowUI(Zotero,{},undefined,undefined,undefined,undefined,abstract,{
+    PathUtils:{join:(...parts)=>parts.join('/')},IOUtils:{writeJSON:async(_path,value)=>{written=value;}}
+  });
+  const paper={id:'one',year:2026,venueID:'ICML.cc/2026/Conference',title:'Paper',authors:['Ada Example'],abstract:'',doi:'10.1000/example',url:'https://example.org'};
+  const candidate={...paper,evidence:[]};ui.papers=[paper];ui.candidates=[candidate];ui.selected.add(ui.paperKey(candidate));ui.loadedTargets=[{conference:'ICML',year:2026}];
+  ui.coverageRows=[{conference:'ICML',year:2026,fetchedAt:'2026-01-01T00:00:00Z',missingAbstracts:1}];ui.query={};ui.filterPapers=async()=>{};
+  await ui.enrichAbstracts(new AbortController().signal);
+  assert.equal(paper.abstract,'Resolved abstract');assert.equal(candidate.abstract,'Resolved abstract');assert.equal(fields.abstractNote,'Resolved abstract');assert.equal(saves,1);
+  assert.equal(written.papers[0].abstractSource,'Semantic Scholar');assert.equal(ui.coverageRows[0].missingAbstracts,0);
 });
 
 test('saved OpenReview items recover direct PDFs without any recent import or cached paper metadata',async()=>{

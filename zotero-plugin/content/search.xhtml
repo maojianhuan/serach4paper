@@ -13,6 +13,7 @@
   <script src="arxiv.js"></script>
   <script src="publication.js"></script>
   <script src="openreview.js"></script>
+  <script src="abstract.js"></script>
   <script src="search.js" defer="defer"></script>
 </head>
 <body>
@@ -29,8 +30,8 @@
   </section>
   <p id="venue-summary" class="hint" role="status"></p>
   <section class="query" aria-label="论文检索条件">
-    <label>会议 <select id="conference"></select></label>
-    <label>会议年份 <input id="year" type="number" min="2000" max="2100" value="2026" /></label>
+    <label>会议（可多选） <select id="conference" multiple="multiple" size="6"></select></label>
+    <label>年份（分号或范围） <input id="year" value="2026" placeholder="例如：2024; 2025 或 2024-2026" /></label>
     <label class="grow">关键词 <input id="terms" value="anomaly detection; time series" placeholder="例如：anomaly detection; time series" aria-describedby="phrase-rule" /></label>
     <label>关键词关系 <select id="operator"><option value="AND">全部满足（AND）</option><option value="OR">任意满足（OR）</option></select></label>
     <button id="fetch" class="primary" title="优先读取所选会议、年份的本地名单；没有本地数据时联网获取并保存">搜索论文</button>
@@ -54,7 +55,8 @@
   <div class="workspace">
     <section class="candidates" aria-label="候选论文">
       <div class="toolbar"><strong id="count">候选论文 0 篇</strong><span id="selection">已选 0 篇</span>
-        <button id="select-page" disabled="disabled">选中本页</button><button id="clear" disabled="disabled">清空选择</button></div>
+        <button id="select-page" disabled="disabled">选中本页</button><button id="clear" disabled="disabled">清空选择</button>
+        <button id="enrich-abstracts" disabled="disabled">补全选中摘要</button></div>
       <div class="table-scroll"><table><thead><tr><th scope="col">选择</th><th scope="col">论文标题 / 命中字段</th></tr></thead><tbody id="results"></tbody></table>
         <p id="empty">点击标题预览，勾选后导入。</p></div>
       <div class="pagination"><button id="previous" disabled="disabled">上一页</button><span id="page">0 / 0</span><button id="next" disabled="disabled">下一页</button></div>

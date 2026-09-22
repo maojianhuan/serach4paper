@@ -5,9 +5,37 @@ var Search4PaperUI = {
   acm: window.arguments[0].acmSession,
   activePage: "search", operationPage: null,
   papers: [], candidates: [], selected: new Set(), active: null,
-  page: 0, pageSize: 100, busy: false, controller: null, query: null, loadedYear: null, loadedConference: null, filtersDirty: true,
+  page: 0, pageSize: 100, busy: false, controller: null, query: null, loadedTargets: [], coverageRows: [], filtersDirty: true,
   labels: { title: "标题", abstract: "摘要", keywords: "关键词", tldr: "TLDR" },
   $(id) { return document.getElementById(id); },
+  selectedConferences() {
+    const select = this.$("conference");
+    const selected = [...(select.selectedOptions || [])].map(option => option.value).filter(Boolean);
+    return selected.length ? selected : select.value ? [select.value] : [];
+  },
+  selectedYears() {
+    const years = new Set();
+    for (const part of String(this.$("year").value || "").split(/[;；,，\s]+/).filter(Boolean)) {
+      const range = part.match(/^((?:19|20)\d{2})-((?:19|20)\d{2})$/);
+      if (range) {
+        const first = Number(range[1]), last = Number(range[2]);
+        if (first > last || last - first > 10) throw new Error("年份范围必须递增且最多跨 10 年。");
+        for (let year = first; year <= last; year++) years.add(year);
+      }
+      else {
+        const year = Number(part); Search4PaperCore.validateYear(year); years.add(year);
+      }
+    }
+    if (!years.size) throw new Error("请至少输入一个年份。");
+    return [...years].sort((a, b) => a - b);
+  },
+  selectedTargets() {
+    const conferences = this.selectedConferences();
+    if (!conferences.length) throw new Error("请至少选择一个会议。");
+    return conferences.flatMap(conference => this.selectedYears().map(year => ({ conference, year })));
+  },
+  targetKey(target) { return `${target.conference}:${target.year}`; },
+  paperKey(paper) { return `${paper.venueID}:${paper.id}`; },
   switchPage(page) {
     this.activePage = page;
     for (const name of ["search", "fulltext"]) {
@@ -28,7 +56,7 @@ var Search4PaperUI = {
     this.$("cancel").disabled = !this.busy || this.operationPage !== "search";
     this.$("fulltext-cancel").disabled = !this.busy || this.operationPage !== "fulltext";
     if (this.busy) return;
-    const noConference = !this.$("conference").value;
+    const noConference = !this.selectedConferences().length;
     this.$("conference").disabled = noConference;
     this.$("fetch").disabled = this.$("refresh-papers").disabled = noConference;
     this.$("filter").disabled = noConference || !this.papers.length;
@@ -37,21 +65,28 @@ var Search4PaperUI = {
       : !this.selected.size ? "请勾选论文左侧的复选框，或点击“选中本页”。" : "导入到所选文献库位置。";
     this.$("select-page").disabled = !this.candidates.length;
     this.$("clear").disabled = !this.selected.size;
+    this.$("enrich-abstracts").disabled = !this.selected.size;
     this.$("previous").disabled = this.page === 0;
     this.$("next").disabled = (this.page + 1) * this.pageSize >= this.candidates.length;
     this.$("source").disabled = !this.active;
   },
   updateConferenceOptions() {
-    const select = this.$("conference"), previous = select.value;
+    const select = this.$("conference"), previous = new Set(this.selectedConferences());
     const names = Search4PaperCore.filterConferences({ field: this.$("venue-field").value,
       type: this.$("venue-type").value, rank: this.$("venue-rank").value });
     select.replaceChildren();
-    for (const name of names) select.add(new Option(name, name));
-    select.value = names.includes(previous) ? previous : names[0] || "";
+    for (const name of names) {
+      const option = new Option(name, name); option.selected = previous.has(name); select.add(option);
+    }
+    if (!names.some(name => previous.has(name)) && names.length) {
+      select.value = names[0]; select.options[0].selected = true;
+    }
+    if (!names.length) select.value = "";
     this.$("venue-summary").textContent = names.length
       ? `CCF 2026 · 当前可选 ${names.length} / ${Search4PaperCore.CONFERENCES.length} 个会议。三个目录条件同时满足；仅显示已支持来源。`
       : "当前组合暂无已支持来源。期刊和其他会议尚未接入，请调整目录筛选。";
-    if (previous !== select.value && this.loadedConference) {
+    const changed = [...previous].sort().join("\n") !== this.selectedConferences().sort().join("\n");
+    if (changed && this.loadedTargets.length) {
       this.filtersDirty = true;
       this.status("会议选择已改变；已有结果保留，更换会议后请重新搜索。");
     }
@@ -118,64 +153,57 @@ var Search4PaperUI = {
   },
   async fetchPapers(signal, refresh = false) {
     const query = this.readQuery();
-    const conference = this.$("conference").value;
-    const year = Number(this.$("year").value);
-    const venueID = Search4PaperCore.venueID(conference, year);
-    const source = Search4PaperCore.sourceName(conference);
-    const path = PathUtils.join(this.Zotero.DataDirectory.dir, "search4paper", conference, `${year}.json`);
-    this.papers = []; this.loadedYear = null; this.loadedConference = null; this.query = null;
+    const targets = this.selectedTargets();
+    this.papers = []; this.loadedTargets = []; this.coverageRows = []; this.query = null;
     this.candidates = []; this.selected.clear(); this.active = null; this.page = 0;
     this.render(); this.preview(null);
-    this.$("coverage").textContent = `正在读取 ${conference} ${year} 的公开录用名单…`;
+    this.$("coverage").textContent = `正在读取 ${targets.length} 个会议/年份范围的公开录用名单…`;
     this.status("正在读取本地元数据…");
-    let metadata, local = false;
+    const loaded = [];
     try {
-      if (!refresh && await IOUtils.exists(path)) {
-        local = true;
-        try { metadata = Search4PaperCore.validateMetadata(await IOUtils.readJSON(path), year, conference); }
-        catch (error) { throw new Error(`读取本地元数据失败：${error.message}\n${path}\n请点击“刷新名单”重新获取。`); }
-      }
-      else {
-        this.status(`正在连接 ${source}…`);
-        const papers = await Search4PaperSources.fetchAccepted(year, {
-          conference, signal, request: (url, requestSignal, type) => this.request(url, requestSignal, type),
-          onProgress: (done, total, detail = "") => this.status(`获取 ${conference} ${year}：${done}${total == null ? "" : ` / ${total}`} 篇${detail ? ` · ${detail}` : ""}`)
-        });
-        metadata = { schemaVersion: 1, venueID, year,
-          fetchedAt: new Date().toISOString(), paperCount: papers.length, papers };
-        signal.throwIfAborted();
-        this.status(`正在保存 ${papers.length} 篇论文的本地元数据…`);
-        try {
-          await IOUtils.makeDirectory(PathUtils.parent(path), { createAncestors: true });
+      for (let index = 0; index < targets.length; index++) {
+        const { conference, year } = targets[index], venueID = Search4PaperCore.venueID(conference, year);
+        const source = Search4PaperCore.sourceName(conference);
+        const path = PathUtils.join(this.Zotero.DataDirectory.dir, "search4paper", conference, `${year}.json`);
+        let metadata, local = false;
+        if (!refresh && await IOUtils.exists(path)) {
+          local = true;
+          try { metadata = Search4PaperCore.validateMetadata(await IOUtils.readJSON(path), year, conference); }
+          catch (error) { throw new Error(`读取本地元数据失败：${error.message}\n${path}\n请点击“刷新名单”重新获取。`); }
+        }
+        else {
+          this.status(`正在连接 ${source}（${index + 1} / ${targets.length}）…`);
+          const papers = await Search4PaperSources.fetchAccepted(year, { conference, signal,
+            request: (url, requestSignal, type) => this.request(url, requestSignal, type),
+            onProgress: (done, total, detail = "") => this.status(`获取 ${conference} ${year}（${index + 1} / ${targets.length}）：${done}${total == null ? "" : ` / ${total}`} 篇${detail ? ` · ${detail}` : ""}`) });
+          metadata = { schemaVersion: 1, venueID, year, fetchedAt: new Date().toISOString(), paperCount: papers.length, papers };
           signal.throwIfAborted();
-          // Replace the previous complete list only after the new JSON is written.
+          await IOUtils.makeDirectory(PathUtils.parent(path), { createAncestors: true });
           await IOUtils.writeJSON(path, metadata, { tmpPath: `${path}.tmp` });
         }
-        catch (error) {
-          signal.throwIfAborted();
-          throw new Error(`保存本地元数据失败：${error.message}\n${path}`);
-        }
+        loaded.push({ target: { conference, year }, metadata, local, source, path });
+        signal.throwIfAborted();
       }
-      signal.throwIfAborted();
     }
     catch (error) {
-      this.$("coverage").textContent = "本次未加载完整名单；可点击“搜索论文”读取已有本地数据。";
+      this.$("coverage").textContent = `本次未加载完整范围（已完成 ${loaded.length} / ${targets.length}）；未发布部分结果。`;
       throw error;
     }
-    this.papers = metadata.papers;
-    this.loadedYear = year;
-    this.loadedConference = conference;
-    const scope = (Search4PaperCore.DATABASE_SOURCES[conference] || Search4PaperCore.SYSTEMS_SOURCES[conference])
-      ? [...new Set(this.papers.map(p => p.track))].join(" / ") : conference === "ACL" ? (year < 2020 ? "主会第 1 卷" : "主会 Long Papers") : conference === "EMNLP" ? (year < 2020 ? "主会第 1 卷" : "主会 main 卷")
-      : conference === "ICDE" ? "Research Papers" : conference === "AAAI" ? "Technical Tracks" : "主会论文";
-    this.$("coverage").textContent = `${conference} ${year} · ${source} · ${scope} ${this.papers.length} 篇 · 缺少摘要 ${this.papers.filter(p => !p.abstract.trim()).length} 篇 · ${local ? "本地名单" : "已保存到本地"} · 获取时间 ${new Date(metadata.fetchedAt).toLocaleString()}`;
-    if (this.papers[0]?.retrievalWarning) this.$("coverage").textContent += ` · ${this.papers[0].retrievalWarning}`;
+    this.papers = loaded.flatMap(entry => entry.metadata.papers);
+    this.loadedTargets = targets;
+    this.coverageRows = loaded.map(entry => ({ ...entry.target, source: entry.source,
+      paperCount: entry.metadata.paperCount,
+      missingAbstracts: entry.metadata.papers.filter(paper => !paper.abstract.trim()).length,
+      local: entry.local, fetchedAt: entry.metadata.fetchedAt,
+      warning: entry.metadata.papers[0]?.retrievalWarning || "" }));
+    this.$("coverage").textContent = `已加载 ${loaded.length} 个会议/年份范围、${this.papers.length} 篇论文；缺少摘要 ${this.coverageRows.reduce((sum, row) => sum + row.missingAbstracts, 0)} 篇。\n`
+      + this.coverageRows.map(row => `${row.conference} ${row.year} · ${row.source} · ${row.paperCount} 篇 · 缺摘要 ${row.missingAbstracts} · ${row.local ? "本地名单" : "已保存到本地"}${row.warning ? ` · ${row.warning}` : ""}`).join("\n");
     await this.filterPapers(signal, query);
   },
   async filterPapers(signal, query = this.readQuery()) {
-    if (this.$("conference").value !== this.loadedConference || Number(this.$("year").value) !== this.loadedYear) {
-      throw new Error("会议或年份已更改，请点击“搜索论文”获取对应名单。");
-    }
+    const selected = this.selectedTargets().map(target => this.targetKey(target)).sort();
+    const loaded = this.loadedTargets.map(target => this.targetKey(target)).sort();
+    if (selected.join("\n") !== loaded.join("\n")) throw new Error("会议或年份已更改，请点击“搜索论文”获取对应名单。");
     const candidates = [];
     for (let i = 0; i < this.papers.length; i++) {
       if (i % 100 === 0) {
@@ -193,19 +221,20 @@ var Search4PaperUI = {
   render() {
     const tbody = this.$("results"); tbody.replaceChildren();
     for (const paper of this.candidates.slice(this.page * this.pageSize, (this.page + 1) * this.pageSize)) {
-      const tr = document.createElementNS("http://www.w3.org/1999/xhtml", "tr"); tr.dataset.id = paper.id;
-      tr.classList.toggle("active", this.active?.id === paper.id);
+      const key = this.paperKey(paper);
+      const tr = document.createElementNS("http://www.w3.org/1999/xhtml", "tr"); tr.dataset.id = key;
+      tr.classList.toggle("active", this.active && this.paperKey(this.active) === key);
       const choice = document.createElementNS("http://www.w3.org/1999/xhtml", "td"), text = document.createElementNS("http://www.w3.org/1999/xhtml", "td");
       const checkbox = document.createElementNS("http://www.w3.org/1999/xhtml", "input"); checkbox.type = "checkbox";
-      checkbox.checked = this.selected.has(paper.id); checkbox.setAttribute("aria-label", `选择 ${paper.title}`);
+      checkbox.checked = this.selected.has(key); checkbox.setAttribute("aria-label", `选择 ${paper.title}`);
       checkbox.addEventListener("change", () => {
-        if (checkbox.checked) this.selected.add(paper.id); else this.selected.delete(paper.id);
+        if (checkbox.checked) this.selected.add(key); else this.selected.delete(key);
         this.selection();
       });
       const title = document.createElementNS("http://www.w3.org/1999/xhtml", "button"); title.className = "paper-button"; title.textContent = paper.title;
       title.addEventListener("click", () => this.preview(paper));
       const fields = document.createElementNS("http://www.w3.org/1999/xhtml", "span"); fields.className = "match-fields";
-      fields.textContent = [...new Set(paper.evidence.map(hit => this.labels[hit.field]))].join(" · ");
+      fields.textContent = `${paper.venueID.split("/")[0]} ${paper.year} · ` + [...new Set(paper.evidence.map(hit => this.labels[hit.field]))].join(" · ");
       choice.append(checkbox); text.append(title, fields); tr.append(choice, text); tbody.append(tr);
     }
     this.$("count").textContent = `候选论文 ${this.candidates.length} 篇`;
@@ -229,7 +258,7 @@ var Search4PaperUI = {
       label.textContent = `${this.labels[hit.field]} · ${hit.term}：`;
       li.append(label, document.createTextNode(hit.text)); this.$("evidence").append(li);
     }
-    for (const row of this.$("results").children) row.classList.toggle("active", row.dataset.id === paper?.id);
+    for (const row of this.$("results").children) row.classList.toggle("active", paper && row.dataset.id === this.paperKey(paper));
     this.controls();
   },
   refreshCollections() {
@@ -245,7 +274,7 @@ var Search4PaperUI = {
     if (select.selectedIndex < 0) select.value = "";
   },
   async importPapers(signal) {
-    const papers = this.candidates.filter(p => this.selected.has(p.id));
+    const papers = this.candidates.filter(p => this.selected.has(this.paperKey(p)));
     if (!papers.length) throw new Error("请先选择论文。");
     if (this.filtersDirty) throw new Error("检索条件已修改，请先应用筛选。");
     this.status("正在检查文献库中的已有条目…");
@@ -264,6 +293,56 @@ var Search4PaperUI = {
     if (failed) summary += `\n${failed.paper.title}：${failed.error}`;
     if (signal.aborted) summary += " 已取消后续处理。";
     this.status(summary, Boolean(failed));
+  },
+  async enrichAbstracts(signal) {
+    const papers = this.candidates.filter(paper => this.selected.has(this.paperKey(paper)) && !paper.abstract.trim());
+    if (!papers.length) throw new Error("选中的论文均已有摘要。");
+    const items = (await this.Zotero.Items.getAll(this.Zotero.Libraries.userLibraryID, true, false))
+      .filter(item => item.isRegularItem() && !item.deleted);
+    const results = [], changedTargets = new Set();
+    for (const paper of papers) {
+      if (signal.aborted) break;
+      this.status(`补全摘要 ${results.length + 1} / ${papers.length}：${paper.title}`);
+      try {
+        const resolved = await Search4PaperAbstract.resolve(paper, {
+          signal, request: (url, requestSignal, type) => this.request(url, requestSignal, type)
+        });
+        if (!resolved) throw new Error("未找到标题、作者和年份均严格匹配的摘要。");
+        const sourcePaper = this.papers.find(candidate => this.paperKey(candidate) === this.paperKey(paper));
+        if (!sourcePaper) throw new Error("当前候选已不属于已加载的会议/年份范围。");
+        for (const target of [sourcePaper, paper]) {
+          target.abstract = resolved.abstract;
+          target.abstractSource = resolved.source;
+          target.abstractSourceURL = resolved.sourceURL;
+        }
+        changedTargets.add(this.loadedTargets.find(target => Search4PaperCore.venueID(target.conference, target.year) === paper.venueID));
+        const identities = Search4PaperCore.identities(paper), matches = items.filter(item => {
+          const existing = Search4PaperCore.identities({ doi: item.getField("DOI"), url: item.getField("url"), extra: item.getField("extra") });
+          return [...identities].some(identity => existing.has(identity));
+        });
+        if (matches.length > 1) throw new Error("Zotero 中存在多个相同来源标识的条目，摘要未写回条目。");
+        let written = false;
+        if (matches.length === 1 && !matches[0].getField("abstractNote").trim()) {
+          matches[0].setField("abstractNote", paper.abstract); await matches[0].saveTx(); written = true;
+        }
+        results.push({ paper, source: resolved.source, written });
+      }
+      catch (error) { results.push({ paper, error: error.message }); }
+    }
+    for (const target of [...changedTargets].filter(Boolean)) {
+      const venueID = Search4PaperCore.venueID(target.conference, target.year);
+      const rows = this.papers.filter(paper => paper.venueID === venueID);
+      const coverage = this.coverageRows.find(row => row.conference === target.conference && row.year === target.year);
+      const path = PathUtils.join(this.Zotero.DataDirectory.dir, "search4paper", target.conference, `${target.year}.json`);
+      await IOUtils.writeJSON(path, { schemaVersion: 1, venueID, year: target.year,
+        fetchedAt: coverage.fetchedAt, paperCount: rows.length, papers: rows }, { tmpPath: `${path}.tmp` });
+      coverage.missingAbstracts = rows.filter(paper => !paper.abstract.trim()).length;
+    }
+    await this.filterPapers(signal, this.query);
+    const success = results.filter(result => !result.error).length;
+    const written = results.filter(result => result.written).length;
+    const failures = results.filter(result => result.error);
+    this.status(`摘要补全：成功 ${success}，失败 ${failures.length}，写回已有 Zotero 条目 ${written}。${failures.length ? "\n" + failures.map(result => `${result.paper.title}：${result.error}`).join("\n") : ""}`, Boolean(failures.length));
   },
   async getFullText(signal) {
     const items = [...(this.Zotero.getActiveZoteroPane()?.getSelectedItems() || [])];
@@ -435,12 +514,13 @@ var Search4PaperUI = {
     this.$("refresh-papers").addEventListener("click", () => this.operation(signal => this.fetchPapers(signal, true)));
     this.$("filter").addEventListener("click", () => this.operation(signal => this.filterPapers(signal)));
     this.$("import").addEventListener("click", () => this.operation(signal => this.importPapers(signal)));
+    this.$("enrich-abstracts").addEventListener("click", () => this.operation(signal => this.enrichAbstracts(signal)));
     this.$("cancel").addEventListener("click", () => {
       if (this.operationPage === "search") this.controller?.abort();
     });
     this.$("refresh").addEventListener("click", () => this.refreshCollections());
     this.$("select-page").addEventListener("click", () => {
-      for (const paper of this.candidates.slice(this.page * this.pageSize, (this.page + 1) * this.pageSize)) this.selected.add(paper.id);
+      for (const paper of this.candidates.slice(this.page * this.pageSize, (this.page + 1) * this.pageSize)) this.selected.add(this.paperKey(paper));
       this.render();
     });
     this.$("clear").addEventListener("click", () => { this.selected.clear(); this.render(); });
