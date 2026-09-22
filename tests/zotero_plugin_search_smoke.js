@@ -47,7 +47,7 @@ async function runSearch4PaperConferenceSmoke({ expectedDataDir, reportPath,
         await click('filter');
         assert(ui.$('status').textContent.includes('会议或年份已更改') && ui.filtersDirty, 'Changed source must not filter the previous list');
       }
-      const venueID = `${conference}.cc/${year}/Conference`;
+      const venueID = win.Search4PaperCore.venueID(conference, year);
       const urls = [];
       report.activeSearch = { conference, year, pages: [] };
       ui.request = async function (url, signal) {

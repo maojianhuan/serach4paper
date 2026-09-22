@@ -1,7 +1,18 @@
 {
   "addons": {
     "search4paper@local": {
-      "updates": []
+      "updates": [
+        {
+          "version": "0.1.4",
+          "update_link": "https://github.com/maojianhuan/serach4paper/releases/download/zotero-v0.1.4/search4paper-0.1.4.xpi",
+          "applications": {
+            "zotero": {
+              "strict_min_version": "10.0",
+              "strict_max_version": "10.0.*"
+            }
+          }
+        }
+      ]
     }
   }
 }

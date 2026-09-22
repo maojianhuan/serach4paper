@@ -1,7 +1,7 @@
 /* Pure retrieval/matching logic; also exercised by Node's built-in test runner. */
 var Search4PaperCore = (() => {
   const FIELDS = ["title", "abstract", "keywords", "tldr"];
-  const CONFERENCES = ["ICML", "NeurIPS", "ICLR", "AAAI", "ACL", "CVPR", "ICCV", "EMNLP", "ECCV", "CRYPTO", "EUROCRYPT", "ASIACRYPT", "ICDE", "SIGMOD", "KDD", "SIGIR", "VLDB", "FAST", "NSDI", "OSDI", "USENIX Security", "CCS", "NDSS", "SIGCOMM", "FSE"];
+  const CONFERENCES = ["ICML", "NeurIPS", "ICLR", "AAAI", "ACL", "CVPR", "ICCV", "EMNLP", "ECCV", "CRYPTO", "EUROCRYPT", "ASIACRYPT", "ICDE", "SIGMOD", "KDD", "SIGIR", "VLDB", "FAST", "NSDI", "OSDI", "USENIX Security", "CCS", "NDSS", "SIGCOMM", "FSE", "WWW"];
   // CCF 2026: supported subset of code/ccf_venues.json; https://ccf.atom.im/
   const CONFERENCE_CATEGORIES = {
     "ICML": {
@@ -103,13 +103,14 @@ var Search4PaperCore = (() => {
   CONFERENCE_CATEGORIES["NDSS"] = { field: "网络与信息安全", type: "会议", rank: "A" };
   CONFERENCE_CATEGORIES["SIGCOMM"] = { field: "计算机网络", type: "会议", rank: "A" };
   CONFERENCE_CATEGORIES["FSE"] = { field: "软件工程/系统软件/程序设计语言", type: "会议", rank: "A" };
+  CONFERENCE_CATEGORIES["WWW"] = { field: "交叉/综合/新兴", type: "会议", rank: "A" };
   function filterConferences({ field = "", type = "", rank = "" } = {}) {
     return CONFERENCES.filter(name => {
       const venue = CONFERENCE_CATEGORIES[name];
       return (!field || venue.field === field) && (!type || venue.type === type) && (!rank || venue.rank === rank);
     });
   }
-  const OPENREVIEW_CONFERENCES = ["ICML", "NeurIPS", "ICLR"];
+  const OPENREVIEW_CONFERENCES = ["ICML", "NeurIPS", "ICLR", "WWW"];
   const CONFERENCE_NAMES = {
     "FAST": "USENIX Conference on File and Storage Technologies (FAST)",
     "NSDI": "USENIX Symposium on Networked Systems Design and Implementation (NSDI)",
@@ -128,6 +129,7 @@ var Search4PaperCore = (() => {
     ICML: "International Conference on Machine Learning",
     NeurIPS: "Advances in Neural Information Processing Systems",
     ICLR: "International Conference on Learning Representations",
+    WWW: "The Web Conference",
     AAAI: "AAAI Conference on Artificial Intelligence",
     ACL: "Annual Meeting of the Association for Computational Linguistics",
     CVPR: "IEEE/CVF Conference on Computer Vision and Pattern Recognition",
@@ -155,6 +157,7 @@ var Search4PaperCore = (() => {
   function venueID(conference, year) {
     if (!CONFERENCES.includes(conference)) throw new Error("请选择受支持的会议。");
     validateYear(year);
+    if (conference === "WWW") return `ACM.org/TheWebConf/${year}/Conference`;
     return OPENREVIEW_CONFERENCES.includes(conference)
       ? `${conference}.cc/${year}/Conference` : `${conference}/${year}/Conference`;
   }

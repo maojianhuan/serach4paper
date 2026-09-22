@@ -39,11 +39,12 @@ test('selecting current results enables import for all supported conferences', (
   }
 });
 
-test('only the twenty-five requested conferences are available; OpenReview venue IDs remain unchanged', async () => {
-  assert.deepEqual(core.CONFERENCES, ['ICML', 'NeurIPS', 'ICLR', 'AAAI', 'ACL', 'CVPR', 'ICCV', 'EMNLP', 'ECCV', 'CRYPTO', 'EUROCRYPT', 'ASIACRYPT', 'ICDE', 'SIGMOD', 'KDD', 'SIGIR', 'VLDB', 'FAST', 'NSDI', 'OSDI', 'USENIX Security', 'CCS', 'NDSS', 'SIGCOMM', 'FSE']);
-  for (const conference of core.OPENREVIEW_CONFERENCES) {
+test('the twenty-six supported conferences include WWW with its exact OpenReview venue ID', async () => {
+  assert.deepEqual(core.CONFERENCES, ['ICML', 'NeurIPS', 'ICLR', 'AAAI', 'ACL', 'CVPR', 'ICCV', 'EMNLP', 'ECCV', 'CRYPTO', 'EUROCRYPT', 'ASIACRYPT', 'ICDE', 'SIGMOD', 'KDD', 'SIGIR', 'VLDB', 'FAST', 'NSDI', 'OSDI', 'USENIX Security', 'CCS', 'NDSS', 'SIGCOMM', 'FSE', 'WWW']);
+  for (const conference of ['ICML', 'NeurIPS', 'ICLR']) {
     for (const year of [2025, 2026]) assert.equal(core.venueID(conference, year), `${conference}.cc/${year}/Conference`);
   }
+  for (const year of [2025, 2026]) assert.equal(core.venueID('WWW', year), `ACM.org/TheWebConf/${year}/Conference`);
   let requests = 0;
   for (const conference of ['NIPS', '', 'constructor', '../ICML']) {
     await assert.rejects(core.fetchAccepted(2026, { conference, request: async () => { requests++; } }), /请选择/);
@@ -53,7 +54,7 @@ test('only the twenty-five requested conferences are available; OpenReview venue
 
 test('every page and normalized paper retain the selected conference and year', async () => {
   for (const conference of core.OPENREVIEW_CONFERENCES) for (const year of [2025, 2026]) {
-    const venueID = `${conference}.cc/${year}/Conference`, offsets = [];
+    const venueID = core.venueID(conference, year), offsets = [];
     const papers = await core.fetchAccepted(year, { conference, request: async url => {
       const params = new URL(url).searchParams;
       assert.equal(params.get('venueid'), venueID);
@@ -72,8 +73,9 @@ test('every page and normalized paper retain the selected conference and year', 
 test('cross-conference and cross-year API records cannot enter the selected list', async () => {
   for (const conference of core.OPENREVIEW_CONFERENCES) {
     const other = conference === 'ICML' ? 'ICLR' : 'ICML';
-    for (const venue of [`${other}.cc/2026/Conference`, `${conference}.cc/2025/Conference`,
-      `${conference}.cc/2026/Conference/Rejected`, `${conference}.cc/2026/Workshop`]) {
+    const selected = core.venueID(conference, 2026);
+    for (const venue of [core.venueID(other, 2026), core.venueID(conference, 2025),
+      `${selected}/Rejected`, `${selected}/Workshop`]) {
       await assert.rejects(core.fetchAccepted(2026, { conference, request: async () =>
         ({ count: 1, notes: [note('1', { venueid: { value: venue } })] }) }), /其他会议或未录用/);
     }
@@ -484,7 +486,7 @@ test('welcome does not open after shutdown or on a closed main window', async ()
   assert.equal(opened, 0);
 });
 
-function workflowUI(Zotero = {}, importer = {}, ieee = {status: '尚未验证', context: null}) {
+function workflowUI(Zotero = {}, importer = {}, ieee = {status: '尚未验证', context: null}, arxiv = {resolve: async () => null}) {
   const ieeeScope = {URL};
   vm.runInNewContext(readFileSync(require.resolve('../zotero-plugin/content/ieee.js'),'utf8'),ieeeScope);
   for (const method of ['pdfURL','hasPaperURL','canResolve']) ieee[method] = ieeeScope.Search4PaperIEEE.prototype[method];
@@ -494,7 +496,8 @@ function workflowUI(Zotero = {}, importer = {}, ieee = {status: '尚未验证', 
       setAttribute(name, value) { this[name] = value; }, classList: {toggle() {}}});
     return elements.get(id);
   };
-  const scope = {AbortController, Option: function(text,value){this.text=text;this.value=value;}, Search4PaperCore: core, Search4PaperImport: importer,
+  const scope = {URL, AbortController, Option: function(text,value){this.text=text;this.value=value;}, Search4PaperCore: core, Search4PaperImport: importer,
+    Search4PaperArxiv: arxiv,
     window: {arguments: [{Zotero, ieeeSession: ieee, acmSession: {canHandle:()=>false,status:'',verificationURL:''}}], addEventListener() {}},
     document: {getElementById: element, querySelectorAll: () => [...elements.values()]}};
   vm.runInNewContext(readFileSync(require.resolve('../zotero-plugin/content/search.js'), 'utf8'), scope);
@@ -593,7 +596,7 @@ test('ICDE metadata uses source/year identities, preserves explicit links and le
   }
 });
 
-test('ICDE tries existing direct/Zotero retrieval before an explicitly started IEEE session', async () => {
+test('ICDE uses an explicitly started IEEE session before the final Zotero fallback', async () => {
   for (const hasPDF of [true,false]) {
     const calls = [];
     const item = {id:1,libraryID:1,isRegularItem:()=>true,getField:f=>f==='extra'?'Source ID: icde:2026:1':f==='url'?'https://ieeexplore.ieee.org/document/123':'ICDE paper'};
@@ -601,7 +604,7 @@ test('ICDE tries existing direct/Zotero retrieval before an explicitly started I
       {async findPDFs(){calls.push('generic');return [{hasPDF,title:'ICDE paper'}];}},
       {context:{id:1},status:'test',async download(){calls.push('institutional');return [{hasPDF:true,title:'ICDE paper'}];}});
     ui.switchPage('fulltext');await ui.getFullText(new AbortController().signal);
-    assert.deepEqual(calls,hasPDF?['generic']:['generic','institutional']);
+    assert.deepEqual(calls,['institutional']);
   }
 });
 
@@ -626,7 +629,7 @@ test('full-text flow resolves a missing IEEE URL then continues with login or na
       {context:loggedIn?{id:1}:null,status:'test',async resolvePaperURL(){calls.push('resolve');fields.url='https://ieeexplore.ieee.org/document/11113091/';},
         async download(){calls.push('institutional');return [{title:fields.title,hasPDF:true}];}});
     await ui.getFullText(new AbortController().signal);
-    assert.deepEqual(calls,['generic','resolve',loggedIn?'institutional':'generic']);assert.equal(ui.lastPDFs[0].hasPDF,true);
+    assert.deepEqual(calls,['resolve',loggedIn?'institutional':'generic']);assert.equal(ui.lastPDFs[0].hasPDF,true);
   }
 });
 
@@ -641,6 +644,7 @@ test('CCF filters use the existing 2026 catalogue and intersect without adding s
   assert.deepEqual(core.filterConferences({field:'人工智能',type:'会议',rank:'B'}),['EMNLP','ECCV']);
   assert.deepEqual(core.filterConferences({field:'网络与信息安全',rank:'A'}),['CRYPTO','EUROCRYPT','USENIX Security','CCS','NDSS']);
   assert.deepEqual(core.filterConferences({field:'数据库/数据挖掘/内容检索'}),['ICDE','SIGMOD','KDD','SIGIR','VLDB']);
+  assert.deepEqual(core.filterConferences({field:'交叉/综合/新兴'}),['WWW']);
   assert.deepEqual(core.filterConferences({type:'期刊'}),[]);
   assert.deepEqual(core.filterConferences({rank:'C'}),[]);
 });
@@ -702,9 +706,9 @@ test('fulltext uses ACM public download first and exposes verification only afte
   ui.acm={canHandle:()=>true,status:'ACM',verificationURL:outcome.verificationRequired?'https://dl.acm.org/doi/10.1145/1.2':'',
    download:async()=>{acm++;return {title:'TSINR',...outcome};}};
   ui.switchPage('fulltext');await ui.getFullText(new AbortController().signal);
-  assert.equal(acm,1);assert.equal(native,outcome.hasPDF||outcome.verificationRequired?0:1);
+  assert.equal(acm,1);assert.equal(native,outcome.hasPDF?0:1);
   assert.equal(ui.$('acm-access').hidden,!outcome.verificationRequired);
-  if(native)assert.match(ui.lastPDFs[0].error,/ACM HTTP 404；native unavailable/);
+  if(native)assert.equal(ui.lastPDFs[0].error,`${outcome.error}；native unavailable`);
  }
 });
 
@@ -713,12 +717,15 @@ test('known FSE/OA PDF is tried before ACM access and a successful download stop
  for(const directSuccess of [true,false]){
   const calls=[];
   const ui=workflowUI({getActiveZoteroPane:()=>({getSelectedItems:()=>[item]}),Libraries:{get:()=>({filesEditable:true})}},
-   {findPDFs:async(Z,results)=>{calls.push(['direct',results[0].paper.pdfURL]);return [{title:'FSE paper',hasPDF:directSuccess,error:directSuccess?'':'direct failed'}];}});
+   {findPDFs:async(Z,results,options)=>{calls.push([options.direct===false?'native':'direct',options.direct]);
+     return [{title:'FSE paper',hasPDF:options.direct!==false&&directSuccess,error:options.direct!==false&&directSuccess?'':'download failed'}];}},
+   undefined,{resolve:async()=>({pdfURL:'https://arxiv.org/pdf/2502.01937',arxivID:'2502.01937'})});
   ui.acm={canHandle:()=>true,status:'ACM',verificationURL:'',download:async()=>{calls.push(['acm']);return {title:'FSE paper',hasPDF:false,verificationRequired:true,error:'ACM 403'};}};
   ui.lastImport={results:[{item,paper:{title:'FSE paper',pdfURL:'https://arxiv.org/pdf/2502.01937'}}]};
   ui.switchPage('fulltext');await ui.getFullText(new AbortController().signal);
-  assert.deepEqual(calls,directSuccess?[['direct','https://arxiv.org/pdf/2502.01937']]:[['direct','https://arxiv.org/pdf/2502.01937'],['acm']]);
+  assert.deepEqual(calls,directSuccess?[['direct','https://arxiv.org/pdf/2502.01937']]
+    :[['direct','https://arxiv.org/pdf/2502.01937'],['acm'],['native',false]]);
   assert.equal(ui.lastPDFs[0].hasPDF,directSuccess);
-  if(!directSuccess)assert.match(ui.lastPDFs[0].error,/direct failed；ACM 403/);
+  if(!directSuccess)assert.match(ui.lastPDFs[0].error,/download failed；ACM 403/);
  }
 });

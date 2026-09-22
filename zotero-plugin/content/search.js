@@ -277,37 +277,63 @@ var Search4PaperUI = {
         if (!item.isRegularItem() || item.deleted || !this.Zotero.Libraries.get(item.libraryID).filesEditable) {
           throw new Error("请选择可添加附件的文献条目。");
         }
-        // Use the existing institutional path only after the user explicitly starts login.
-        let institutional = this.ieee.context && this.ieee.hasPaperURL(item.getField("url"));
-        let result;
-        const paper = this.lastImport?.results.find(r => r.item?.id === item.id)?.paper || { title };
+        // Each stage is explicit so a publisher access failure cannot hide an
+        // available author version, and Zotero's broad resolver remains last.
+        let result, institutional = this.ieee.context && this.ieee.hasPaperURL(item.getField("url"));
+        const errors = [];
+        const remember = value => { if (value?.error) errors.push(value.error); return value; };
+        const savedFullText = item.getField("extra").match(/^Full Text URL: (https?:\/\/\S+)\s*$/m)?.[1] || "";
+        const paper = this.lastImport?.results.find(r => r.item?.id === item.id)?.paper || { title, pdfURL: savedFullText };
+        const isHost = (value, hosts) => value && URL.canParse(value)
+          && hosts.includes(new URL(value).hostname);
+        const explicitOA = paper.pdfURL && !isHost(paper.pdfURL, ["openreview.net", "www.openreview.net",
+          "arxiv.org", "www.arxiv.org", "dl.acm.org", "ieeexplore.ieee.org"]);
+        if (explicitOA) {
+          [result] = await Search4PaperImport.findPDFs(this.Zotero, [{ item, paper }], {
+            signal, direct: paper.pdfURL, directLabel: "开放出版商 PDF", native: false
+          });
+          remember(result);
+        }
+
+        if (!result?.hasPDF && !signal.aborted) {
+          try {
+            const arxiv = await Search4PaperArxiv.resolve(item, paper, {
+              signal, request: (url, requestSignal, type) => this.request(url, requestSignal, type),
+              wait: milliseconds => this.Zotero.Promise.delay(milliseconds)
+            });
+            if (arxiv) {
+              [result] = await Search4PaperImport.findPDFs(this.Zotero, [{ item, paper }], {
+                signal, direct: arxiv.pdfURL, directLabel: `arXiv 最新版本（${arxiv.arxivID}）`, native: false
+              });
+              remember(result);
+            }
+          }
+          catch (error) { errors.push(`arXiv 查询：${error.message}`); }
+        }
+
+        const openReviewURL = Search4PaperImport.openReviewPDFURL?.(item)
+          || (isHost(paper.pdfURL, ["openreview.net", "www.openreview.net"]) ? paper.pdfURL : "");
+        if (!result?.hasPDF && openReviewURL && !signal.aborted) {
+          [result] = await Search4PaperImport.findPDFs(this.Zotero, [{ item, paper }], {
+            signal, direct: openReviewURL, directLabel: "OpenReview PDF", native: false
+          });
+          remember(result);
+        }
+
         const acm = this.acm.canHandle(item);
-        // Preserve the existing official/OA link path before publisher-specific access.
-        const triedDirect = acm && Boolean(paper.pdfURL);
-        if (triedDirect) [result] = await Search4PaperImport.findPDFs(this.Zotero, [{ item, paper }], { signal });
         if (acm && !result?.hasPDF && !signal.aborted) {
-          const directError = result?.error;
           result = await this.acm.download(item, { signal });
-          if (!result.hasPDF && directError) result.error = `${directError}；${result.error}`;
+          remember(result);
           this.updateACMStatus();
         }
-        const acmError = result?.error;
+
         const icde = /^Source ID: icde:/m.test(item.getField("extra"));
-        if (!triedDirect && !result?.hasPDF && !result?.verificationRequired && !signal.aborted && (!institutional || icde)) {
-          // ICDE is not assumed paywalled: try the existing direct/Zotero path first.
-          [result] = await Search4PaperImport.findPDFs(this.Zotero, [{ item, paper }], { signal });
-          if (acmError && result && !result.hasPDF) result.error = [acmError, result.error].filter(Boolean).join("；");
-        }
         let resolutionError = "";
         if (!result?.hasPDF && !signal.aborted && !this.ieee.hasPaperURL(item.getField("url")) && this.ieee.canResolve(item)) {
           this.status(`正在查找 IEEE 论文地址：${title}`);
           try {
             await this.ieee.resolvePaperURL(item, { signal });
             institutional = this.ieee.context && this.ieee.hasPaperURL(item.getField("url"));
-            if (!institutional && !signal.aborted) {
-              // The new URL/DOI can also help Zotero find an accessible copy without login.
-              [result] = await Search4PaperImport.findPDFs(this.Zotero, [{ item, paper: { title } }], { signal });
-            }
           }
           catch (error) { resolutionError = error.message; }
         }
@@ -316,13 +342,22 @@ var Search4PaperUI = {
             this.$("ieee-status").textContent = this.ieee.status;
             this.status(`获取全文 ${outcomes.length + 1} / ${items.length}：${title} · ${progress.phase === "waiting" ? "等待下载间隔" : progress.phase === "downloading" ? "开始下载 " + progress.startedAt : progress.hasPDF ? "附件已取得" : progress.error}`);
           } });
+          remember(result);
         }
-        if (result && !result.hasPDF && !institutional && !signal.aborted && (icde || resolutionError || this.ieee.hasPaperURL(item.getField("url")))) {
+        if (!result?.hasPDF && !institutional && !signal.aborted && (icde || resolutionError || this.ieee.hasPaperURL(item.getField("url")))) {
           const reason = resolutionError || (this.ieee.hasPaperURL(item.getField("url"))
             ? "尚未启动 IEEE 机构登录；如需订阅访问，请先完成北航登录后重试。"
             : "未取得 IEEE 单篇论文地址；请核实条目元数据后重试。");
-          result.error = [result.error, reason].filter(Boolean).join("；");
+          errors.push(reason);
         }
+
+        if (!result?.hasPDF && !signal.aborted) {
+          [result] = await Search4PaperImport.findPDFs(this.Zotero, [{ item, paper: { title } }], {
+            signal, direct: false, native: true
+          });
+          remember(result);
+        }
+        if (result && !result.hasPDF) result.error = [...new Set(errors)].join("；");
         if (result) outcomes.push(result);
       }
       catch (error) { outcomes.push({ itemID: item.id, title, hasPDF: false, error: error.message }); }

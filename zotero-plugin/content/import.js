@@ -64,8 +64,9 @@ var Search4PaperImport = {
               if (paper.date) item.setField("date", paper.date);
               if (paper.pages) item.setField("pages", paper.pages);
             }
-            item.setField("extra", paper.source && paper.source !== "openreview"
-              ? `Source ID: ${paper.source}:${paper.id}` : `OpenReview ID: ${paper.id}`);
+            const identity = paper.source && paper.source !== "openreview"
+              ? `Source ID: ${paper.source}:${paper.id}` : `OpenReview ID: ${paper.id}`;
+            item.setField("extra", [identity, paper.pdfURL ? `Full Text URL: ${paper.pdfURL}` : ""].filter(Boolean).join("\n"));
             // Preserve source author names without guessing surnames.
             item.setCreators(paper.authors.map(name => ({ lastName: name, fieldMode: 1, creatorType: "author" })));
           }
@@ -113,7 +114,8 @@ var Search4PaperImport = {
     return id ? `https://openreview.net/pdf?id=${encodeURIComponent(id)}` : "";
   },
 
-  async findPDFs(Zotero, results, { signal, onProgress = () => {} } = {}) {
+  async findPDFs(Zotero, results, { signal, onProgress = () => {}, direct = "auto",
+      directLabel = "直接下载", native = true } = {}) {
     const outcomes = [];
     for (const { item, paper } of results.filter(result => result.item)) {
       if (signal?.aborted) break;
@@ -122,7 +124,8 @@ var Search4PaperImport = {
       try {
         // Recover the stable note-based URL from the saved item, even after reopening
         // the window or selecting papers from an older import batch.
-        const pdfURL = this.openReviewPDFURL(item) || paper.pdfURL;
+        const pdfURL = direct === false ? "" : typeof direct === "string" && direct !== "auto"
+          ? direct : this.openReviewPDFURL(item) || paper.pdfURL;
         const existing = await Zotero.Items.getAsync(item.getAttachments());
         let hasExistingPDF = false;
         for (const attachment of existing) {
@@ -132,12 +135,12 @@ var Search4PaperImport = {
         if (!hasExistingPDF && (Zotero.Attachments.canFindFileForItem(item)
             || (pdfURL && item.isRegularItem() && !item.isFeedItem))) {
           const failures = [];
-          for (const direct of (pdfURL ? [true, false] : [false])) {
+          for (const isDirect of [...(pdfURL ? [true] : []), ...(native ? [false] : [])]) {
             signal?.throwIfAborted();
             let attemptError = "", attachment;
-            const stage = direct ? "直接下载" : "Zotero 原生全文查找";
+            const stage = isDirect ? directLabel : "Zotero 原生全文查找";
             try {
-              const resolvers = direct ? [{ url: pdfURL }]
+              const resolvers = isDirect ? [{ url: pdfURL }]
                 : Zotero.Attachments.getFileResolvers(item);
               attachment = await Zotero.Attachments.addFileFromURLs(item, resolvers, {
                 onBeforeRequest() { signal?.throwIfAborted(); },
