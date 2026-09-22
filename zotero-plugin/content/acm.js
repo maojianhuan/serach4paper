@@ -75,7 +75,7 @@ var Search4PaperACM = class {
       const pageURL = this.paperURL(item);
       for (const attachment of await this.Zotero.Items.getAsync(item.getAttachments())) {
         if (attachment.attachmentContentType === "application/pdf" && attachment.isFileAttachment() && await attachment.fileExists()) {
-          return { ...result, hasPDF: true, reused: true };
+          return { ...result, hasPDF: true, reused: true, source: "已有本地 PDF" };
         }
       }
       this.ensureContext();
@@ -115,6 +115,7 @@ var Search4PaperACM = class {
       signal.throwIfAborted();
       await this.Zotero.Attachments.importFromFile({ file: path, parentItemID: item.id, title: "ACM Full Text" });
       result.hasPDF = true;
+      result.source = "ACM 出版商 PDF";
       if (this.verificationURL === pageURL) this.verificationURL = "";
       if (!this.verificationURL) this.status = "ACM PDF 获取成功；当前会话可继续使用。";
     }

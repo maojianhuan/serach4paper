@@ -52,9 +52,9 @@ Windows 打包脚本已包含新目录和采集模块。**仓库现有 EXE 尚�
 
 在 Zotero 内检索、预览和导入会议论文，全文获取使用独立页签。支持 26 个会议，可按专业领域和 CCF 分类筛选；具体来源和年份见 [插件说明](zotero-plugin/README.md)。
 
-下载 [search4paper-0.1.4.xpi](https://github.com/maojianhuan/serach4paper/releases/download/zotero-v0.1.4/search4paper-0.1.4.xpi)（[Release](https://github.com/maojianhuan/serach4paper/releases/tag/zotero-v0.1.4)）。在 Zotero 10 的 **工具 → 插件 → 从文件安装插件** 中安装并重启，再从工具菜单打开 search4paper。同一 XPI 适用于 Windows、Linux、macOS；无需 Python、Node 或 EXE。
+下载 [search4paper-0.1.5.xpi](https://github.com/maojianhuan/serach4paper/releases/download/zotero-v0.1.5/search4paper-0.1.5.xpi)（[Release](https://github.com/maojianhuan/serach4paper/releases/tag/zotero-v0.1.5)）。在 Zotero 10 的 **工具 → 插件 → 从文件安装插件** 中安装并重启，再从工具菜单打开 search4paper。同一 XPI 适用于 Windows、Linux、macOS；无需 Python、Node 或 EXE。
 
-源码构建：`python3 zotero-plugin/build.py`，输出 `dist/search4paper-0.1.4.xpi`。Python 仅用于开发打包；下述独立 Windows 应用与 Zotero 插件互不依赖。
+源码构建：`python3 zotero-plugin/build.py`，输出 `dist/search4paper-0.1.5.xpi`。Python 仅用于开发打包；下述独立 Windows 应用与 Zotero 插件互不依赖。
 
 #### 直接运行 Windows EXE
 
@@ -359,7 +359,7 @@ Typical workflow:
 
 Search, preview and import papers inside Zotero, with a separate full-text page. The plugin supports 26 conferences; see [supported sources, years and build instructions](zotero-plugin/README.md).
 
-Download [search4paper-0.1.4.xpi](https://github.com/maojianhuan/serach4paper/releases/download/zotero-v0.1.4/search4paper-0.1.4.xpi) ([Release](https://github.com/maojianhuan/serach4paper/releases/tag/zotero-v0.1.4)). In Zotero 10, use **Tools → Plugins → Install Plugin From File**, then restart. The same XPI works across Windows, Linux and macOS; no Python, Node or EXE is required.
+Download [search4paper-0.1.5.xpi](https://github.com/maojianhuan/serach4paper/releases/download/zotero-v0.1.5/search4paper-0.1.5.xpi) ([Release](https://github.com/maojianhuan/serach4paper/releases/tag/zotero-v0.1.5)). In Zotero 10, use **Tools → Plugins → Install Plugin From File**, then restart. The same XPI works across Windows, Linux and macOS; no Python, Node or EXE is required.
 
 Developers build with `python3 zotero-plugin/build.py`. The separate Windows application below is not an XPI builder.
 

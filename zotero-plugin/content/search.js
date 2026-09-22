@@ -295,6 +295,15 @@ var Search4PaperUI = {
           remember(result);
         }
 
+        if (!item.getField("DOI") && Search4PaperPublication.isWWW(item, paper) && !signal.aborted) {
+          try {
+            await Search4PaperPublication.resolveWWWDOI(item, paper, {
+              signal, request: (url, requestSignal, type) => this.request(url, requestSignal, type)
+            });
+          }
+          catch (error) { errors.push(error.message); }
+        }
+
         if (!result?.hasPDF && !signal.aborted) {
           try {
             const arxiv = await Search4PaperArxiv.resolve(item, paper, {
@@ -311,13 +320,25 @@ var Search4PaperUI = {
           catch (error) { errors.push(`arXiv 查询：${error.message}`); }
         }
 
-        const openReviewURL = Search4PaperImport.openReviewPDFURL?.(item)
+        let openReviewURLs = [];
+        const openReviewFallback = Search4PaperImport.openReviewPDFURL?.(item)
           || (isHost(paper.pdfURL, ["openreview.net", "www.openreview.net"]) ? paper.pdfURL : "");
-        if (!result?.hasPDF && openReviewURL && !signal.aborted) {
-          [result] = await Search4PaperImport.findPDFs(this.Zotero, [{ item, paper }], {
-            signal, direct: openReviewURL, directLabel: "OpenReview PDF", native: false
-          });
-          remember(result);
+        if (!result?.hasPDF && openReviewFallback && !signal.aborted) {
+          try {
+            openReviewURLs = await Search4PaperOpenReview.URLs(item, {
+              signal, request: (url, requestSignal, type) => this.request(url, requestSignal, type)
+            });
+          }
+          catch (error) { errors.push(`OpenReview 稳定地址解析：${error.message}`); }
+          if (!openReviewURLs.length) openReviewURLs = [openReviewFallback];
+          for (const url of [...new Set(openReviewURLs)]) {
+            if (result?.hasPDF || signal.aborted) break;
+            const stable = /^https:\/\/openreview\.net\/pdf\/[a-f0-9]{40}\.pdf$/i.test(url);
+            [result] = await Search4PaperImport.findPDFs(this.Zotero, [{ item, paper }], {
+              signal, direct: url, directLabel: stable ? "OpenReview 稳定 PDF" : "OpenReview PDF", native: false
+            });
+            remember(result);
+          }
         }
 
         const acm = this.acm.canHandle(item);
@@ -365,7 +386,7 @@ var Search4PaperUI = {
     this.lastPDFs = outcomes;
     this.$("ieee-status").textContent = this.ieee.status;
     this.status(`全文获取：成功 ${outcomes.filter(r => r.hasPDF).length}，失败 ${outcomes.filter(r => !r.hasPDF).length}，未处理 ${items.length - outcomes.length}。文献条目已保留。${signal.aborted ? " 已取消后续处理。" : ""}\n`
-      + outcomes.map(r => `${r.title}：${r.reused ? "复用已有 PDF" : r.hasPDF ? "附件已取得" : r.error || "未取得可用全文"}${r.startedAt ? `（请求开始 ${r.startedAt}）` : ""}`).join("\n"));
+      + outcomes.map(r => `${r.title}：${r.reused ? "复用已有 PDF" : r.hasPDF ? `附件已取得（${r.source || "来源未标记"}）` : r.error || "未取得可用全文"}${r.startedAt ? `（请求开始 ${r.startedAt}）` : ""}`).join("\n"));
   },
   updateACMStatus() {
     this.$("acm-access").hidden = !this.acm.verificationURL;

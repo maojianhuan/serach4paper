@@ -120,7 +120,7 @@ var Search4PaperImport = {
     for (const { item, paper } of results.filter(result => result.item)) {
       if (signal?.aborted) break;
       onProgress(outcomes.length + 1, results.length, paper.title);
-      let error = "";
+      let error = "", source = "";
       try {
         // Recover the stable note-based URL from the saved item, even after reopening
         // the window or selecting papers from an older import batch.
@@ -151,7 +151,7 @@ var Search4PaperImport = {
               });
             }
             catch (exception) { attemptError = exception.message || String(exception); }
-            if (attachment) break;
+            if (attachment) { source = stage; break; }
             failures.push(`${stage}：${attemptError || "未找到可用全文"}`);
             error = failures.join("；");
           }
@@ -164,7 +164,8 @@ var Search4PaperImport = {
         if (attachment.attachmentContentType === "application/pdf" && attachment.isFileAttachment()
             && await attachment.fileExists()) hasPDF = true;
       }
-      outcomes.push({ itemID: item.id, title: paper.title, hasPDF, error: hasPDF ? "" : error });
+      if (hasPDF && !source) source = "已有本地 PDF";
+      outcomes.push({ itemID: item.id, title: paper.title, hasPDF, source, error: hasPDF ? "" : error });
     }
     return outcomes;
   }

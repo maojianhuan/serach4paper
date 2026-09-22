@@ -399,7 +399,7 @@ test('PDF 403 proceeds to native full-text lookup and clears the earlier error o
 
 test('successful direct PDF download does not invoke native lookup', async () => {
   const f = pdfFixture([() => true]);
-  assert.equal((await f.run())[0].hasPDF, true);
+  const result=(await f.run())[0];assert.equal(result.hasPDF, true);assert.equal(result.source,'直接下载');
   assert.deepEqual(f.calls, ['https://example.org/direct.pdf']);
 });
 
@@ -419,10 +419,10 @@ test('a thrown direct download error also proceeds to native lookup', async () =
 
 test('missing direct link invokes native lookup once; existing PDFs need no download', async () => {
   const native = pdfFixture([() => true], {direct:false});
-  assert.equal((await native.run())[0].hasPDF, true);
+  const nativeResult=(await native.run())[0];assert.equal(nativeResult.hasPDF, true);assert.equal(nativeResult.source,'Zotero 原生全文查找');
   assert.deepEqual(native.calls, ['resolve','https://example.org/native.pdf']);
   const existing = pdfFixture([], {existing:true});
-  assert.equal((await existing.run())[0].hasPDF, true); assert.deepEqual(existing.calls, []);
+  const existingResult=(await existing.run())[0];assert.equal(existingResult.hasPDF, true);assert.equal(existingResult.source,'已有本地 PDF'); assert.deepEqual(existing.calls, []);
 });
 
 test('cancelling after direct PDF failure prevents native lookup', async () => {
@@ -486,7 +486,8 @@ test('welcome does not open after shutdown or on a closed main window', async ()
   assert.equal(opened, 0);
 });
 
-function workflowUI(Zotero = {}, importer = {}, ieee = {status: '尚未验证', context: null}, arxiv = {resolve: async () => null}) {
+function workflowUI(Zotero = {}, importer = {}, ieee = {status: '尚未验证', context: null}, arxiv = {resolve: async () => null},
+    publication = {isWWW:()=>false,resolveWWWDOI:async()=>''}, openreview = {URLs:async()=>[]}) {
   const ieeeScope = {URL};
   vm.runInNewContext(readFileSync(require.resolve('../zotero-plugin/content/ieee.js'),'utf8'),ieeeScope);
   for (const method of ['pdfURL','hasPaperURL','canResolve']) ieee[method] = ieeeScope.Search4PaperIEEE.prototype[method];
@@ -497,7 +498,7 @@ function workflowUI(Zotero = {}, importer = {}, ieee = {status: '尚未验证', 
     return elements.get(id);
   };
   const scope = {URL, AbortController, Option: function(text,value){this.text=text;this.value=value;}, Search4PaperCore: core, Search4PaperImport: importer,
-    Search4PaperArxiv: arxiv,
+    Search4PaperArxiv: arxiv, Search4PaperPublication: publication, Search4PaperOpenReview: openreview,
     window: {arguments: [{Zotero, ieeeSession: ieee, acmSession: {canHandle:()=>false,status:'',verificationURL:''}}], addEventListener() {}},
     document: {getElementById: element, querySelectorAll: () => [...elements.values()]}};
   vm.runInNewContext(readFileSync(require.resolve('../zotero-plugin/content/search.js'), 'utf8'), scope);

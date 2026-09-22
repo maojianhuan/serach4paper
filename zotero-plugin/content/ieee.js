@@ -148,6 +148,7 @@ var Search4PaperIEEE = class {
           if (attachment.attachmentContentType === "application/pdf" && attachment.isFileAttachment() && await attachment.fileExists()) {
             result.hasPDF = true;
             result.reused = true;
+            result.source = "已有本地 PDF";
             break;
           }
         }
@@ -196,6 +197,7 @@ var Search4PaperIEEE = class {
           signal.throwIfAborted();
           await this.Zotero.Attachments.importFromFile({ file: path, parentItemID: item.id, title: "IEEE Full Text" });
           result.hasPDF = true;
+          result.source = "IEEE 出版商 PDF";
         }
       }
       catch (error) {
